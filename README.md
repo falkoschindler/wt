@@ -53,7 +53,7 @@ ln -s "$PWD/wt/wt" ~/.local/bin/wt
 
 Worktrees are created under `~/worktrees/<repo>-[<number>-]<branch>`.
 
-`wt list` colours PR state GitHub-style (open green, merged purple, closed red, draft grey) and renders the PR number as a clickable link to GitHub. Colour and links are emitted only when writing to a terminal, so piping the output stays clean.
+`wt list` colours PR state GitHub-style (open green, merged purple, closed red, draft grey) and makes most cells clickable: the repo, PR number and milestone link to their GitHub pages, and the path opens the worktree in VS Code. Colour and links are emitted only when writing to a terminal, so piping the output stays clean.
 
 ## Recommended VS Code setup
 

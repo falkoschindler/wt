@@ -42,6 +42,13 @@ osc8() {
     printf '%s' "$2"
   fi
 }
+
+# Left-justify text $2 (linked to URL $1) in a field of width $3, padding OUTSIDE the
+# link so only the text — not the trailing spaces — is underlined.
+cell() {
+  local pad=$(( $3 - ${#2} )); [ "$pad" -lt 0 ] && pad=0
+  osc8 "$1" "$2"; printf '%*s' "$pad" ""
+}
 color_for() {
   case "$1" in
     OPEN)   printf '%s' "$C_OPEN" ;;
@@ -52,17 +59,30 @@ color_for() {
   esac
 }
 
-# Echo "<number> <STATE> <url> <milestone-title>" for the PR of branch $2 in worktree dir $1,
-# or nothing. The milestone title comes last because it may contain spaces.
+# Echo "<number> <STATE> <url> <milestone-number> <milestone-title>" for the PR of branch $2
+# in worktree dir $1, or nothing. The milestone title comes last because it may contain spaces.
 lookup_pr() {
   command -v gh >/dev/null 2>&1 || return 0
   ( cd "$1" && gh pr list --head "$2" --state all --json number,state,isDraft,url,milestone \
-      -q 'if length>0 then "\(.[0].number) \(if .[0].isDraft and .[0].state=="OPEN" then "DRAFT" else .[0].state end) \(.[0].url) \(.[0].milestone.title // "-")" else empty end' \
+      -q 'if length>0 then "\(.[0].number) \(if .[0].isDraft and .[0].state=="OPEN" then "DRAFT" else .[0].state end) \(.[0].url) \(.[0].milestone.number // "-") \(.[0].milestone.title // "-")" else empty end' \
       2>/dev/null ) || true
 }
 
 # Repo name that owns worktree dir $1 (basename of its main checkout).
 wt_repo() { basename "$(dirname "$(git -C "$1" rev-parse --path-format=absolute --git-common-dir)")"; }
+
+# https base URL of the GitHub repo that owns worktree dir $1, or nothing (non-GitHub origins).
+repo_url() {
+  local u
+  u=$(git -C "$1" remote get-url origin 2>/dev/null) || return 0
+  case "$u" in
+    git@github.com:*)       u="https://github.com/${u#git@github.com:}" ;;
+    ssh://git@github.com/*) u="https://github.com/${u#ssh://git@github.com/}" ;;
+    https://github.com/*)   : ;;
+    *) return 0 ;;
+  esac
+  printf '%s' "${u%.git}"
+}
 
 # --- list: every worktree under ~/worktrees, across all repos ---
 if [ "$mode" = "list" ] || [ "$mode" = "ls" ]; then
@@ -72,12 +92,20 @@ if [ "$mode" = "list" ] || [ "$mode" = "ls" ]; then
     d=${d%/}
     git -C "$d" rev-parse --git-dir >/dev/null 2>&1 || continue
     wbranch=$(git -C "$d" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "(detached)")
-    num=""; state=""; url=""; mile=""
-    read -r num state url mile <<<"$(lookup_pr "$d" "$wbranch")" || true
-    [ -n "$num" ] || { num="-"; state="none"; url=""; mile="-"; }
-    prcell=$(osc8 "$url" "$(printf '%-7s' "$num")")
-    printf '%-12s %s %s%-7s%s %-12s %-34s %s\n' \
-      "$(wt_repo "$d")" "$prcell" "$(color_for "$state")" "$state" "$C_RESET" "$mile" "$wbranch" "$d"
+    num=""; state=""; url=""; milenum=""; mile=""
+    read -r num state url milenum mile <<<"$(lookup_pr "$d" "$wbranch")" || true
+    [ -n "$num" ] || { num="-"; state="none"; url=""; milenum="-"; mile="-"; }
+    repourl=$(repo_url "$d"); mileurl=""
+    # Note: no branch link — the head branch may live on a fork or be unpushed, so a
+    # /tree/<branch> URL on origin would 404. Repo/PR/milestone resolve reliably.
+    [ -n "$repourl" ] && [[ "$milenum" =~ ^[0-9]+$ ]] && mileurl="$repourl/milestone/$milenum"
+    repocell=$(cell "$repourl" "$(wt_repo "$d")" 12)
+    prcell=$(cell "$url" "$num" 7)
+    milecell=$(cell "$mileurl" "$mile" 12)
+    branchcell=$(cell "" "$wbranch" 34)
+    pathcell=$(osc8 "vscode://file$d" "$d")
+    printf '%s %s %s%-7s%s %s %s %s\n' \
+      "$repocell" "$prcell" "$(color_for "$state")" "$state" "$C_RESET" "$milecell" "$branchcell" "$pathcell"
   done
   echo
   echo "${C_DIM}merged/closed PRs can be removed with 'wt prune' or 'wt rm'${C_RESET}"
