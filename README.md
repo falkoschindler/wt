@@ -9,7 +9,7 @@ It's built for **running several tasks in parallel** — e.g. multiple AI coding
 ```console
 $ wt 6127            # review PR #6127 in its own worktree + window
 $ wt new my-feature  # start fresh work on a new branch
-$ wt list            # see every worktree, with PR number and state
+$ wt list            # see every worktree, with PR number, state and milestone
 $ wt prune           # clean up worktrees whose PR is merged or closed
 ```
 
@@ -46,7 +46,7 @@ ln -s "$PWD/wt/wt" ~/.local/bin/wt
 | `wt new <branch> [num]` | Fresh branch off the default branch; optional issue/ticket number. | inside the repo |
 | `wt <branch>` | Worktree an existing branch by name (local or on origin). | inside the repo |
 | `wt num <number>` | Add a number to the *current* worktree afterwards (renames + reopens). | inside a worktree |
-| `wt list` | Table of every worktree under `~/worktrees`, with repo, PR number and state. | anywhere |
+| `wt list` | Table of every worktree under `~/worktrees`, with repo, PR number, state and milestone. | anywhere |
 | `wt prune` | Remove worktrees whose PR is merged or closed (asks first). | anywhere |
 | `wt rm` | Remove the *current* worktree and optionally delete its branch. | inside a worktree |
 | `wt help` | Show usage. | anywhere |

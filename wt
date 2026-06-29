@@ -7,7 +7,7 @@
 #   wt new <branch> [num]   New work: fresh branch off the default branch; optional ticket number.
 #   wt <branch-name>        Existing branch by name (local or on origin).
 #   wt num <number>         Add a number to the CURRENT worktree (renames + reopens).
-#   wt list                 List ALL worktrees under ~/worktrees with repo, PR number and state.
+#   wt list                 List ALL worktrees under ~/worktrees with repo, PR number, state and milestone.
 #   wt prune                Remove worktrees whose PR is merged or closed (asks first).
 #   wt rm                   Remove the CURRENT worktree (and optionally delete its branch).
 #   wt help                 Show this help.
@@ -52,11 +52,12 @@ color_for() {
   esac
 }
 
-# Echo "<number> <STATE> <url>" for the PR of branch $2 in worktree dir $1, or nothing.
+# Echo "<number> <STATE> <url> <milestone-title>" for the PR of branch $2 in worktree dir $1,
+# or nothing. The milestone title comes last because it may contain spaces.
 lookup_pr() {
   command -v gh >/dev/null 2>&1 || return 0
-  ( cd "$1" && gh pr list --head "$2" --state all --json number,state,isDraft,url \
-      -q 'if length>0 then "\(.[0].number) \(if .[0].isDraft and .[0].state=="OPEN" then "DRAFT" else .[0].state end) \(.[0].url)" else empty end' \
+  ( cd "$1" && gh pr list --head "$2" --state all --json number,state,isDraft,url,milestone \
+      -q 'if length>0 then "\(.[0].number) \(if .[0].isDraft and .[0].state=="OPEN" then "DRAFT" else .[0].state end) \(.[0].url) \(.[0].milestone.title // "-")" else empty end' \
       2>/dev/null ) || true
 }
 
@@ -65,18 +66,18 @@ wt_repo() { basename "$(dirname "$(git -C "$1" rev-parse --path-format=absolute 
 
 # --- list: every worktree under ~/worktrees, across all repos ---
 if [ "$mode" = "list" ] || [ "$mode" = "ls" ]; then
-  printf '%-12s %-7s %-7s %-34s %s\n' "REPO" "PR" "STATE" "BRANCH" "PATH"
+  printf '%-12s %-7s %-7s %-12s %-34s %s\n' "REPO" "PR" "STATE" "MILESTONE" "BRANCH" "PATH"
   shopt -s nullglob
   for d in "$HOME/worktrees"/*/; do
     d=${d%/}
     git -C "$d" rev-parse --git-dir >/dev/null 2>&1 || continue
     wbranch=$(git -C "$d" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "(detached)")
-    num=""; state=""; url=""
-    read -r num state url <<<"$(lookup_pr "$d" "$wbranch")" || true
-    [ -n "$num" ] || { num="-"; state="none"; url=""; }
+    num=""; state=""; url=""; mile=""
+    read -r num state url mile <<<"$(lookup_pr "$d" "$wbranch")" || true
+    [ -n "$num" ] || { num="-"; state="none"; url=""; mile="-"; }
     prcell=$(osc8 "$url" "$(printf '%-7s' "$num")")
-    printf '%-12s %s %s%-7s%s %-34s %s\n' \
-      "$(wt_repo "$d")" "$prcell" "$(color_for "$state")" "$state" "$C_RESET" "$wbranch" "$d"
+    printf '%-12s %s %s%-7s%s %-12s %-34s %s\n' \
+      "$(wt_repo "$d")" "$prcell" "$(color_for "$state")" "$state" "$C_RESET" "$mile" "$wbranch" "$d"
   done
   echo
   echo "${C_DIM}merged/closed PRs can be removed with 'wt prune' or 'wt rm'${C_RESET}"
