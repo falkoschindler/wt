@@ -3,6 +3,7 @@
 #
 # Usage:
 #   wt <pr-number>          Review/rework a PR: worktree its head branch (number in the name).
+#                           Outside a repo: open the existing worktree with that number (if unique).
 #   wt new <branch> [num]   New work: fresh branch off the default branch; optional ticket number.
 #   wt <branch-name>        Existing branch by name (local or on origin).
 #   wt num <number>         Add a number to the CURRENT worktree (renames + reopens).
@@ -12,6 +13,7 @@
 #   wt help                 Show this help.
 #
 # Create/reuse + num + rm run from inside the target repo; list + prune work anywhere.
+# Outside a repo, a bare number opens a matching existing worktree if there's exactly one.
 # Worktrees live in ~/worktrees/<repo>[-<number>]-<sanitized-branch>.
 
 set -euo pipefail
@@ -112,6 +114,27 @@ if [ "$mode" = "prune" ]; then
     fi
   done
   exit 0
+fi
+
+# --- outside a repo: a bare number opens the existing worktree with that number ---
+# Worktrees are named <repo>-<number>-<branch>, so the number is the segment right
+# after the repo. If exactly one worktree matches, open it; if several, ask to narrow.
+if [[ "$mode" =~ ^[0-9]+$ ]] && ! git rev-parse --git-dir >/dev/null 2>&1; then
+  num=$mode
+  matches=()
+  shopt -s nullglob
+  for d in "$HOME/worktrees"/*/; do
+    d=${d%/}
+    git -C "$d" rev-parse --git-dir >/dev/null 2>&1 || continue
+    [[ "$(basename "$d")" == "$(wt_repo "$d")-${num}-"* ]] && matches+=("$d")
+  done
+  case "${#matches[@]}" in
+    0) die "no worktree numbered $num under ~/worktrees (run inside a repo to create one)" ;;
+    1) code "${matches[0]}"; echo "wt: ${matches[0]}"; exit 0 ;;
+    *) echo "wt: multiple worktrees numbered $num:" >&2
+       printf '  %s\n' "${matches[@]}" >&2
+       die "narrow it down, or run inside the target repo" ;;
+  esac
 fi
 
 # ===== everything below needs to run inside the target repo =====
