@@ -42,8 +42,7 @@ ln -s "$PWD/wt/wt" ~/.local/bin/wt
 
 | Command | What it does | Run from |
 |---|---|---|
-| `wt <pr#>` | Worktree a PR's head branch for review/rework (number in the name). Works with fork PRs. | inside the repo |
-| `wt <number>` | Open an existing worktree by its number — when run *outside* a repo, jumps straight to it if exactly one worktree matches. | anywhere |
+| `wt <pr#>` | Inside a repo: worktree a PR's head branch for review/rework (number in the name; works with fork PRs). Outside a repo: open the existing worktree with that number, if exactly one matches. | in / outside repo |
 | `wt new <branch> [num]` | Fresh branch off the default branch; optional issue/ticket number. | inside the repo |
 | `wt <branch>` | Worktree an existing branch by name (local or on origin). | inside the repo |
 | `wt num <number>` | Add a number to the *current* worktree afterwards (renames + reopens). | inside a worktree |
