@@ -95,16 +95,34 @@ repo_url() {
   printf '%s' "${u%.git}"
 }
 
+# Run lookup_pr for many worktrees concurrently. Reads parallel arrays `dirs` and
+# `branches`, writes each PR line to "$1/<index>" so callers read results back in order.
+# One network round-trip total instead of one per worktree.
+parallel_lookups() {
+  local i
+  for i in "${!dirs[@]}"; do
+    lookup_pr "${dirs[$i]}" "${branches[$i]}" >"$1/$i" &
+  done
+  wait
+}
+
 # --- list: every worktree under ~/worktrees, across all repos ---
 if [ "$mode" = "list" ] || [ "$mode" = "ls" ]; then
   printf '%-12s %-7s %-7s %-12s %-34s %s\n' "REPO" "PR" "STATE" "MILESTONE" "BRANCH" "PATH"
   shopt -s nullglob
+  dirs=(); branches=()
   for d in "$HOME/worktrees"/*/; do
     d=${d%/}
     git -C "$d" rev-parse --git-dir >/dev/null 2>&1 || continue
-    wbranch=$(git -C "$d" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "(detached)")
+    dirs+=("$d")
+    branches+=("$(git -C "$d" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "(detached)")")
+  done
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  parallel_lookups "$tmp"
+  for i in "${!dirs[@]}"; do
+    d=${dirs[$i]}; wbranch=${branches[$i]}
     num=""; state=""; url=""; milenum=""; mile=""
-    read -r num state url milenum mile <<<"$(lookup_pr "$d" "$wbranch")" || true
+    read -r num state url milenum mile <"$tmp/$i" || true
     [ -n "$num" ] || { num="-"; state="none"; url=""; milenum="-"; mile="-"; }
     repourl=$(repo_url "$d"); mileurl=""
     # Note: no branch link — the head branch may live on a fork or be unpushed, so a
@@ -127,13 +145,20 @@ fi
 if [ "$mode" = "prune" ]; then
   paths=(); mains=(); labels=""
   shopt -s nullglob
+  dirs=(); branches=()
   for d in "$HOME/worktrees"/*/; do
     d=${d%/}
     git -C "$d" rev-parse --git-dir >/dev/null 2>&1 || continue
     wbranch=$(git -C "$d" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
     [ -n "$wbranch" ] || continue
+    dirs+=("$d"); branches+=("$wbranch")
+  done
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  parallel_lookups "$tmp"
+  for i in "${!dirs[@]}"; do
+    d=${dirs[$i]}; wbranch=${branches[$i]}
     pnum=""; state=""; purl=""
-    read -r pnum state purl <<<"$(lookup_pr "$d" "$wbranch")" || true
+    read -r pnum state purl <"$tmp/$i" || true
     if [ "$state" = "MERGED" ] || [ "$state" = "CLOSED" ]; then
       paths+=("$d")
       mains+=("$(dirname "$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)")")
