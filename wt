@@ -8,11 +8,12 @@
 #   wt <branch-name>        Existing branch by name (local or on origin).
 #   wt num <number>         Add a number to the CURRENT worktree (renames + reopens).
 #   wt list                 List ALL worktrees under ~/worktrees with repo, PR number, state and milestone.
+#   wt board                Maintainer queue: open issues + PRs in THIS repo grouped by assignee.
 #   wt prune                Remove worktrees whose PR is merged or closed (asks first).
 #   wt rm                   Remove the CURRENT worktree (and optionally delete its branch).
 #   wt help                 Show this help.
 #
-# Create/reuse + num + rm run from inside the target repo; list + prune work anywhere.
+# Create/reuse + num + rm + board run from inside the target repo; list + prune work anywhere.
 # Outside a repo, a bare number opens a matching existing worktree if there's exactly one.
 # Worktrees live in ~/worktrees/<repo>[-<number>]-<sanitized-branch>.
 
@@ -40,9 +41,9 @@ shift || true
 # --- colors (only on a terminal) ---
 if [ -t 1 ]; then
   C_OPEN=$'\033[32m'; C_MERGED=$'\033[35m'; C_CLOSED=$'\033[31m'
-  C_DRAFT=$'\033[90m'; C_DIM=$'\033[2m'; C_RESET=$'\033[0m'; LINKS=1
+  C_DRAFT=$'\033[90m'; C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'; C_RESET=$'\033[0m'; LINKS=1
 else
-  C_OPEN=""; C_MERGED=""; C_CLOSED=""; C_DRAFT=""; C_DIM=""; C_RESET=""; LINKS=""
+  C_OPEN=""; C_MERGED=""; C_CLOSED=""; C_DRAFT=""; C_DIM=""; C_BOLD=""; C_RESET=""; LINKS=""
 fi
 
 # Wrap text $2 in an OSC 8 hyperlink to URL $1 (only on a terminal, only if URL given).
@@ -209,6 +210,81 @@ main_root=$(dirname "$common")
 repo=$(basename "$main_root")
 default=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@' || true)
 [ -n "$default" ] || default=main
+
+# --- board: open issues + PRs grouped by assignee (the "maintainer queue") ---
+# A live, zero-upkeep view of who owns what: every open issue/PR with an assignee in THIS
+# repo, grouped by assignee and ordered by milestone (earliest due date first, undated
+# milestones then no-milestone last). A ✓ marks items you already have as a local worktree.
+# Read-only — nothing is fetched or changed. Your own group floats to the top.
+if [ "$mode" = "board" ]; then
+  command -v gh >/dev/null 2>&1 || die "gh not found (needed for 'wt board')"
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+  # One TSV row per (assignee, item): login, due, milestone, kind, number, url, branch,
+  # draft, name, title. Undated milestones get a "9999" sentinel so they sort after dated
+  # ones; "-" marks no milestone. assignees[]? expands to one row per assignee (none → skip).
+  # branch is "-" when absent (issues, headless PRs): an empty field would be swallowed by
+  # read's tab-IFS whitespace-collapse and shift every later column. No-milestone is "-" too,
+  # ASCII so the column aligns (a multibyte "—" pads by bytes, not display width).
+  iss_jq='.[] | . as $i | ($i.assignees[]?) as $a | [$a.login, ($i.milestone.dueOn // "9999"), ($i.milestone.title // "-"), "issue", ($i.number|tostring), $i.url, "-", "false", ($a.name // $a.login), $i.title] | @tsv'
+  pr_jq='.[]  | . as $i | ($i.assignees[]?) as $a | [$a.login, ($i.milestone.dueOn // "9999"), ($i.milestone.title // "-"), "pr",    ($i.number|tostring), $i.url, ($i.headRefName // "-"), ($i.isDraft|tostring), ($a.name // $a.login), $i.title] | @tsv'
+
+  # Login + issues + PRs fetched concurrently — the network is the only slow part.
+  ( gh api user --jq .login >"$tmp/me" 2>/dev/null ) &
+  ( cd "$main_root" && gh issue list --state open --limit 500 \
+      --json number,title,url,assignees,milestone --jq "$iss_jq" >"$tmp/iss" 2>/dev/null ) &
+  ( cd "$main_root" && gh pr list --state open --limit 500 \
+      --json number,title,url,assignees,milestone,headRefName,isDraft --jq "$pr_jq" >"$tmp/pr" 2>/dev/null ) &
+  wait
+  cat "$tmp/iss" "$tmp/pr" 2>/dev/null | sort -t"$(printf '\t')" -k2,2 -k3,3 -k5,5n >"$tmp/rows"
+  [ -s "$tmp/rows" ] || { echo "wt: nothing assigned in $repo"; exit 0; }
+
+  # Branches that currently have a worktree in this repo (for the ✓ column).
+  wtset="|"
+  while IFS= read -r line; do
+    case "$line" in "branch refs/heads/"*) wtset="${wtset}${line#branch refs/heads/}|" ;; esac
+  done < <(git -C "$main_root" worktree list --porcelain 2>/dev/null)
+
+  me=$(cat "$tmp/me" 2>/dev/null || true)
+  cols=80; [ -t 1 ] && cols=$( { tput cols; } 2>/dev/null || echo 80 )
+  total=$(cut -f5 "$tmp/rows" | sort -u | grep -c '')  # unique items (an item with 2 assignees lists twice)
+  printf '%s%s%s  %s%s open assigned · ✓ = worktree exists%s\n' \
+    "$C_BOLD" "$repo" "$C_RESET" "$C_DIM" "$total" "$C_RESET"
+
+  # Group order: the current user first, then everyone else case-insensitively.
+  order=""
+  [ -n "$me" ] && cut -f1 "$tmp/rows" | grep -Fqx "$me" && order="$me"$'\n'
+  if [ -n "$me" ]; then
+    order+=$(cut -f1 "$tmp/rows" | sort -fu | grep -Fvx "$me" || true)
+  else
+    order+=$(cut -f1 "$tmp/rows" | sort -fu)
+  fi
+
+  printf '%s\n' "$order" | while IFS= read -r login; do
+    [ -n "$login" ] || continue
+    count=$(awk -F"$(printf '\t')" -v u="$login" '$1==u' "$tmp/rows" | grep -c '')
+    name=$(awk -F"$(printf '\t')" -v u="$login" '$1==u{print $9; exit}' "$tmp/rows")
+    [ -n "$name" ] || name=$login
+    printf '\n%s%s%s %s@%s (%s)%s\n' "$C_BOLD" "$name" "$C_RESET" "$C_DIM" "$login" "$count" "$C_RESET"
+    while IFS="$(printf '\t')" read -r l due mile kind num url branch draft nm title; do
+      if [ "$kind" = pr ] && [ "$branch" != "-" ] && [[ "$wtset" == *"|$branch|"* ]]; then
+        mark="${C_OPEN}✓${C_RESET}"
+      else
+        mark=" "
+      fi
+      if [ "$draft" = true ]; then kc=$C_DRAFT; kd="draft"
+      elif [ "$kind" = pr ];  then kc=$C_OPEN;  kd="PR"
+      else                         kc=$C_DIM;   kd="issue"; fi
+      avail=$(( cols - 29 )); [ "$avail" -lt 20 ] && avail=20
+      t=$title; [ "${#t}" -gt "$avail" ] && t="${t:0:avail-1}…"
+      printf '  %s %s%-8s%s %s%-6s%s %s  %s\n' \
+        "$mark" "$C_DIM" "$mile" "$C_RESET" "$kc" "$kd" "$C_RESET" \
+        "$(cell "$url" "#$num" 6)" "$(osc8 "$url" "$t")"
+    done < <(awk -F"$(printf '\t')" -v u="$login" '$1==u' "$tmp/rows")
+  done
+  echo
+  exit 0
+fi
 
 # --- rm: remove the current worktree ---
 if [ "$mode" = "rm" ]; then

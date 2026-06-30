@@ -10,6 +10,7 @@ It's built for **running several tasks in parallel** — e.g. multiple AI coding
 $ wt 6127            # review PR #6127 in its own worktree + window
 $ wt new my-feature  # start fresh work on a new branch
 $ wt list            # see every worktree, with PR number, state and milestone
+$ wt board           # maintainer queue: open issues + PRs grouped by assignee
 $ wt prune           # clean up worktrees whose PR is merged or closed
 ```
 
@@ -47,6 +48,7 @@ ln -s "$PWD/wt/wt" ~/.local/bin/wt
 | `wt <branch>` | Worktree an existing branch by name (local or on origin). | inside the repo |
 | `wt num <number>` | Add a number to the *current* worktree afterwards (renames + reopens). | inside a worktree |
 | `wt list` | Table of every worktree under `~/worktrees`, with repo, PR number, state and milestone. | anywhere |
+| `wt board` | Maintainer queue: open issues + PRs in the repo, grouped by assignee and ordered by milestone, with a ✓ where you already have a worktree. | inside the repo |
 | `wt prune` | Remove worktrees whose PR is merged or closed (asks first). | anywhere |
 | `wt rm` | Remove the *current* worktree and optionally delete its branch. | inside a worktree |
 | `wt help` | Show usage. | anywhere |
@@ -54,6 +56,8 @@ ln -s "$PWD/wt/wt" ~/.local/bin/wt
 Worktrees are created under `~/worktrees/<repo>-[<number>-]<branch>`.
 
 `wt list` colours PR state GitHub-style (open green, merged purple, closed red, draft grey) and makes most cells clickable: the repo, PR number and milestone link to their GitHub pages, and the path opens the worktree in VS Code. Colour and links are emitted only when writing to a terminal, so piping the output stays clean.
+
+`wt board` answers "who's working on what" straight from GitHub's native fields — no project board to hand-maintain. It lists every open issue and PR in the current repo that has an assignee, grouped by assignee (your own group first) and ordered by milestone, with each row linking to its issue/PR. A ✓ marks the ones you already have checked out as a worktree. It only reads, so it's safe to run any time, and the output pipes cleanly like `wt list`.
 
 ## Recommended VS Code setup
 
