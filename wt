@@ -7,7 +7,7 @@
 #   wt new <branch> [num]   New work: fresh branch off the default branch; optional ticket number.
 #   wt <branch-name>        Existing branch by name (local or on origin).
 #   wt num <number>         Add a number to the CURRENT worktree (renames + reopens).
-#   wt list                 List ALL worktrees under ~/worktrees with repo, PR number, state and milestone.
+#   wt list                 List ALL worktrees under ~/worktrees with repo, PR, state, milestone and assignee.
 #   wt board                Maintainer queue: open issues + PRs in THIS repo grouped by assignee.
 #   wt prune                Remove worktrees whose PR is merged or closed (asks first).
 #   wt rm                   Remove the CURRENT worktree (and optionally delete its branch).
@@ -71,12 +71,13 @@ color_for() {
   esac
 }
 
-# Echo "<number> <STATE> <url> <milestone-number> <milestone-title>" for the PR of branch $2
-# in worktree dir $1, or nothing. The milestone title comes last because it may contain spaces.
+# Echo "<number> <STATE> <url> <milestone-number> <assignee> <milestone-title>" for the PR of
+# branch $2 in worktree dir $1, or nothing. assignee is the first assignee's login ("-" if none);
+# it has no spaces, so it sits before the milestone title, which comes last as it may have spaces.
 lookup_pr() {
   command -v gh >/dev/null 2>&1 || return 0
-  ( cd "$1" && gh pr list --head "$2" --state all --json number,state,isDraft,url,milestone \
-      -q 'if length>0 then "\(.[0].number) \(if .[0].isDraft and .[0].state=="OPEN" then "DRAFT" else .[0].state end) \(.[0].url) \(.[0].milestone.number // "-") \(.[0].milestone.title // "-")" else empty end' \
+  ( cd "$1" && gh pr list --head "$2" --state all --json number,state,isDraft,url,milestone,assignees \
+      -q 'if length>0 then "\(.[0].number) \(if .[0].isDraft and .[0].state=="OPEN" then "DRAFT" else .[0].state end) \(.[0].url) \(.[0].milestone.number // "-") \(.[0].assignees[0].login // "-") \(.[0].milestone.title // "-")" else empty end' \
       2>/dev/null ) || true
 }
 
@@ -109,7 +110,6 @@ parallel_lookups() {
 
 # --- list: every worktree under ~/worktrees, across all repos ---
 if [ "$mode" = "list" ] || [ "$mode" = "ls" ]; then
-  printf '%-12s %-7s %-7s %-12s %-34s %s\n' "REPO" "PR" "STATE" "MILESTONE" "BRANCH" "PATH"
   shopt -s nullglob
   dirs=(); branches=()
   for d in "$HOME/worktrees"/*/; do
@@ -120,22 +120,47 @@ if [ "$mode" = "list" ] || [ "$mode" = "ls" ]; then
   done
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
   parallel_lookups "$tmp"
+  # Gather every row's parsed fields into arrays (one git call per dir, not per column)
+  # and grow each column's width to fit its widest value. Min widths are the header labels.
+  r_repo=(); r_num=(); r_state=(); r_url=(); r_mile=(); r_mileurl=()
+  r_branch=(); r_assignee=(); r_assigneeurl=(); r_repourl=(); r_dir=()
+  wrepo=4 wpr=2 wstate=5 wmile=9 wbranch=6 wassignee=8
   for i in "${!dirs[@]}"; do
-    d=${dirs[$i]}; wbranch=${branches[$i]}
-    num=""; state=""; url=""; milenum=""; mile=""
-    read -r num state url milenum mile <"$tmp/$i" || true
-    [ -n "$num" ] || { num="-"; state="none"; url=""; milenum="-"; mile="-"; }
-    repourl=$(repo_url "$d"); mileurl=""
+    d=${dirs[$i]}; wbranch_i=${branches[$i]}
+    num=""; state=""; url=""; milenum=""; assignee=""; mile=""
+    read -r num state url milenum assignee mile <"$tmp/$i" || true
+    [ -n "$num" ] || { num="-"; state="none"; url=""; milenum="-"; assignee="-"; mile="-"; }
+    repourl=$(repo_url "$d"); mileurl=""; assigneeurl=""
     # Note: no branch link — the head branch may live on a fork or be unpushed, so a
     # /tree/<branch> URL on origin would 404. Repo/PR/milestone resolve reliably.
     [ -n "$repourl" ] && [[ "$milenum" =~ ^[0-9]+$ ]] && mileurl="$repourl/milestone/$milenum"
-    repocell=$(cell "$repourl" "$(wt_repo "$d")" 12)
-    prcell=$(cell "$url" "$num" 7)
-    milecell=$(cell "$mileurl" "$mile" 12)
-    branchcell=$(cell "" "$wbranch" 34)
-    pathcell=$(osc8 "vscode://file$d" "$d")
-    printf '%s %s %s%-7s%s %s %s %s\n' \
-      "$repocell" "$prcell" "$(color_for "$state")" "$state" "$C_RESET" "$milecell" "$branchcell" "$pathcell"
+    [ -n "$repourl" ] && [ "$assignee" != "-" ] && assigneeurl="https://github.com/$assignee"
+    reponame=$(wt_repo "$d")
+    r_repo+=("$reponame"); r_num+=("$num"); r_state+=("$state"); r_url+=("$url")
+    r_mile+=("$mile"); r_mileurl+=("$mileurl"); r_branch+=("$wbranch_i")
+    r_assignee+=("$assignee"); r_assigneeurl+=("$assigneeurl"); r_repourl+=("$repourl"); r_dir+=("$d")
+    [ "${#reponame}"  -gt "$wrepo" ]     && wrepo=${#reponame}
+    [ "${#num}"       -gt "$wpr" ]       && wpr=${#num}
+    [ "${#state}"     -gt "$wstate" ]    && wstate=${#state}
+    [ "${#mile}"      -gt "$wmile" ]     && wmile=${#mile}
+    [ "${#wbranch_i}" -gt "$wbranch" ]   && wbranch=${#wbranch_i}
+    [ "${#assignee}"  -gt "$wassignee" ] && wassignee=${#assignee}
+  done
+  printf '%-*s  %-*s  %-*s  %-*s  %-*s  %-*s\n' \
+    "$wrepo" "REPO" "$wpr" "PR" "$wstate" "STATE" "$wmile" "MILESTONE" "$wbranch" "BRANCH" "$wassignee" "ASSIGNEE"
+  for i in "${!r_dir[@]}"; do
+    d=${r_dir[$i]}
+    repocell=$(cell "${r_repourl[$i]}" "${r_repo[$i]}" "$wrepo")
+    prcell=$(cell "${r_url[$i]}" "${r_num[$i]}" "$wpr")
+    milecell=$(cell "${r_mileurl[$i]}" "${r_mile[$i]}" "$wmile")
+    branchcell=$(cell "" "${r_branch[$i]}" "$wbranch")
+    assigneecell=$(cell "${r_assigneeurl[$i]}" "${r_assignee[$i]}" "$wassignee")
+    # The ↗ glyph is the "open in VS Code" link (clickable in a terminal). Piped/non-terminal
+    # output has no hyperlinks, so fall back to the plain path — still useful in scripts.
+    if [ -n "$LINKS" ]; then opencell=$(osc8 "vscode://file$d" "↗"); else opencell=$d; fi
+    printf '%s  %s  %s%-*s%s  %s  %s  %s  %s\n' \
+      "$repocell" "$prcell" "$(color_for "${r_state[$i]}")" "$wstate" "${r_state[$i]}" "$C_RESET" \
+      "$milecell" "$branchcell" "$assigneecell" "$opencell"
   done
   echo
   echo "${C_DIM}merged/closed PRs can be removed with 'wt prune' or 'wt rm'${C_RESET}"
