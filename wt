@@ -22,6 +22,17 @@ die() { echo "wt: $*" >&2; exit 1; }
 sanitize() { echo "$1" | tr '/' '-'; }
 usage() { awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0"; }
 
+# Open a worktree in VS Code. Set WT_NO_OPEN=1 to skip opening (e.g. when an agent/skill
+# drives wt and enters the worktree in the terminal, not a new window). When WT_NO_OPEN is
+# unset the call is byte-identical to the previous `code "$1"` — default behavior unchanged.
+open_editor() {
+  if [ "${WT_NO_OPEN:-0}" = "1" ]; then
+    echo "wt: WT_NO_OPEN set — not opening editor ($1)"
+  else
+    code "$1"
+  fi
+}
+
 mode=${1:-help}
 case "$mode" in help|-h|--help) usage; exit 0 ;; esac
 shift || true
@@ -159,7 +170,7 @@ if [[ "$mode" =~ ^[0-9]+$ ]] && ! git rev-parse --git-dir >/dev/null 2>&1; then
   done
   case "${#matches[@]}" in
     0) die "no worktree numbered $num under ~/worktrees (run inside a repo to create one)" ;;
-    1) code "${matches[0]}"; echo "wt: ${matches[0]}"; exit 0 ;;
+    1) open_editor "${matches[0]}"; echo "wt: ${matches[0]}"; exit 0 ;;
     *) echo "wt: multiple worktrees numbered $num:" >&2
        printf '  %s\n' "${matches[@]}" >&2
        die "narrow it down, or run inside the target repo" ;;
@@ -207,7 +218,7 @@ if [ "$mode" = "num" ]; then
   newpath="$HOME/worktrees/${repo}-${num}-$(sanitize "$branch")"
   [ "$cur" != "$newpath" ] || die "already named that"
   git -C "$main_root" worktree move "$cur" "$newpath"
-  code "$newpath"
+  open_editor "$newpath"
   echo "wt: moved to $newpath  (you can close the old window)"
   exit 0
 fi
@@ -251,5 +262,5 @@ else
   git -C "$main_root" worktree add "$wtpath" -b "$branch" "origin/$branch"
 fi
 
-code "$wtpath"
+open_editor "$wtpath"
 echo "wt: $wtpath  (branch: $branch)"
