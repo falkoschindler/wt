@@ -363,5 +363,15 @@ else
   git -C "$main_root" worktree add "$wtpath" -b "$branch" "origin/$branch"
 fi
 
+# Make `git pull` work without arguments. wt fetches branches with an explicit refspec
+# (or via pull/N/head), which creates the local branch but leaves no upstream and no
+# origin/<branch> remote-tracking ref. Fetch the branch the normal way (this updates
+# origin/<branch> through origin's configured refspec) and point the worktree branch at
+# it. Branches not on origin (e.g. fork-PR heads, brand-new `wt new` branches) make the
+# fetch fail, so they're left untouched.
+if git -C "$wtpath" fetch --quiet origin "$branch" 2>/dev/null; then
+  git -C "$wtpath" branch --quiet --set-upstream-to="origin/$branch" "$branch" 2>/dev/null || true
+fi
+
 open_editor "$wtpath"
 echo "wt: $wtpath  (branch: $branch)"
