@@ -198,10 +198,15 @@ if [ "$mode" = "prune" ]; then
   i=0
   for p in "${paths[@]}"; do
     m=${mains[$i]}; i=$((i+1))
-    if git -C "$m" worktree remove "$p" 2>/dev/null; then
+    if err=$(git -C "$m" worktree remove "$p" 2>&1); then
       echo "removed $p"
+    elif [ -z "$(git -C "$p" status --porcelain 2>/dev/null)" ] \
+        && git -C "$m" worktree remove --force "$p" 2>/dev/null; then
+      # git refuses to remove any worktree containing submodules, even a clean
+      # one — clean means nothing can be lost, so forcing is safe.
+      echo "removed $p (contains submodules; forced)"
     else
-      echo "skipped $p (uncommitted changes — remove with: git -C '$m' worktree remove --force '$p')"
+      echo "skipped $p (${err#fatal: } — force with: git -C '$m' worktree remove --force '$p')"
     fi
   done
   exit 0
@@ -316,8 +321,14 @@ if [ "$mode" = "rm" ]; then
   cur=$(git rev-parse --show-toplevel)
   [ "$cur" != "$main_root" ] || die "run this from inside the worktree to remove, not the main checkout"
   branch=$(git -C "$cur" symbolic-ref --quiet --short HEAD || true)
-  git -C "$main_root" worktree remove "$cur" 2>/dev/null \
-    || die "worktree has uncommitted changes — commit/stash, or force: git worktree remove --force '$cur'"
+  if ! err=$(git -C "$main_root" worktree remove "$cur" 2>&1); then
+    # git refuses to remove any worktree containing submodules, even a clean
+    # one — clean means nothing can be lost, so forcing is safe.
+    if [ -n "$(git -C "$cur" status --porcelain 2>/dev/null)" ] \
+        || ! git -C "$main_root" worktree remove --force "$cur" 2>/dev/null; then
+      die "${err#fatal: } — commit/stash, or force: git worktree remove --force '$cur'"
+    fi
+  fi
   echo "wt: removed $cur"
   if [ -n "$branch" ]; then
     ans=""; read -r -p "Also delete branch '$branch'? [y/N] " ans || ans=""
