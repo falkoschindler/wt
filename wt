@@ -8,7 +8,8 @@
 #                           Outside a repo: open the existing worktree with that number (if unique).
 #   wt new <branch> [num]   New work: fresh branch off the default branch; optional ticket number.
 #   wt <branch-name>        Existing branch by name (local or on origin).
-#   wt num <number>         Add a number to the CURRENT worktree (renames + reopens).
+#   wt num [<number>]       Add a number to the CURRENT worktree (renames + reopens, moving any
+#                           Claude Code session history along). No number: look up the branch's PR.
 #   wt list                 List ALL worktrees under ~/worktrees with repo, PR, state, milestone and assignee.
 #   wt board                Maintainer queue: open issues + PRs in THIS repo grouped by assignee.
 #   wt prune                Remove worktrees whose PR is merged or closed (asks first).
@@ -23,6 +24,9 @@ set -euo pipefail
 
 die() { echo "wt: $*" >&2; exit 1; }
 sanitize() { echo "$1" | tr '/' '-'; }
+# How Claude Code names the per-project session directory for a cwd (every char
+# outside [A-Za-z0-9] becomes "-"), e.g. /Users/x/wt-1-fix → -Users-x-wt-1-fix.
+claude_slug() { printf '%s' "$1" | sed 's/[^A-Za-z0-9]/-/g'; }
 usage() { awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0"; }
 
 # Open a worktree in VS Code. Set WT_NO_OPEN=1 to skip opening (e.g. when an agent/skill
@@ -349,14 +353,35 @@ fi
 
 # --- num: add a number to the current worktree ---
 if [ "$mode" = "num" ]; then
-  [ $# -ge 1 ] || die "usage: wt num <number>"
-  num=$1
   cur=$(git rev-parse --show-toplevel)
   [ "$cur" != "$main_root" ] || die "run this from inside a worktree, not the main checkout"
   branch=$(git -C "$cur" symbolic-ref --quiet --short HEAD) || die "worktree is not on a branch"
+  if [ $# -ge 1 ]; then
+    num=$1
+  else
+    # No number given: use the PR of the current branch (typical after creating a PR
+    # in a worktree that started from an issue or a bare branch).
+    command -v gh >/dev/null 2>&1 || die "gh not found (pass a number: wt num <number>)"
+    num=$( ( cd "$cur" && gh pr list --head "$branch" --state all --json number -q '.[0].number' ) 2>/dev/null ) || true
+    [ -n "$num" ] || die "no PR found for branch '$branch' (pass a number: wt num <number>)"
+    echo "wt: using PR #$num"
+  fi
   newpath="$HOME/worktrees/${repo}-${num}-$(sanitize "$branch")"
   [ "$cur" != "$newpath" ] || die "already named that"
   git -C "$main_root" worktree move "$cur" "$newpath"
+  # Claude Code keys its session history to the (sanitized) directory path — move it
+  # along so the discussions reappear under the renamed worktree (via /resume).
+  old_claude="$HOME/.claude/projects/$(claude_slug "$cur")"
+  new_claude="$HOME/.claude/projects/$(claude_slug "$newpath")"
+  if [ -d "$old_claude" ]; then
+    if [ ! -e "$new_claude" ]; then
+      mv "$old_claude" "$new_claude" && echo "wt: moved Claude Code session history along"
+    else
+      mv -n "$old_claude"/* "$new_claude"/ 2>/dev/null || true
+      rmdir "$old_claude" 2>/dev/null || true
+      echo "wt: merged Claude Code session history into existing project dir"
+    fi
+  fi
   open_editor "$newpath"
   echo "wt: moved to $newpath  (you can close the old window)"
   exit 0
