@@ -2,7 +2,9 @@
 # wt — git worktrees, one per task, each in its own VS Code window.
 #
 # Usage:
-#   wt <pr-number>          Review/rework a PR: worktree its head branch (number in the name).
+#   wt <number>             Review/rework a PR: worktree its head branch (number in the name).
+#                           If <number> is an open issue instead, start new work on a fresh
+#                           local branch named after the issue title.
 #                           Outside a repo: open the existing worktree with that number (if unique).
 #   wt new <branch> [num]   New work: fresh branch off the default branch; optional ticket number.
 #   wt <branch-name>        Existing branch by name (local or on origin).
@@ -370,14 +372,35 @@ if [ "$mode" = "new" ]; then
   base_ref="origin/$default"
   new_branch=1
 elif [[ "$mode" =~ ^[0-9]+$ ]]; then
-  command -v gh >/dev/null 2>&1 || die "gh not found (needed to resolve PR #$mode)"
+  command -v gh >/dev/null 2>&1 || die "gh not found (needed to resolve #$mode)"
   num=$mode
-  branch=$( (cd "$main_root" && gh pr view "$mode" --json headRefName -q .headRefName) 2>/dev/null ) \
-    || die "could not resolve PR #$mode in $repo"
-  # pull/N/head works for fork PRs too; fall back to a plain branch fetch.
-  git -C "$main_root" fetch --quiet origin "pull/$mode/head:$branch" 2>/dev/null \
-    || git -C "$main_root" fetch --quiet origin "$branch:$branch" 2>/dev/null || true
-  new_branch=0
+  if branch=$( (cd "$main_root" && gh pr view "$mode" --json headRefName -q .headRefName) 2>/dev/null ); then
+    # pull/N/head works for fork PRs too; fall back to a plain branch fetch.
+    git -C "$main_root" fetch --quiet origin "pull/$mode/head:$branch" 2>/dev/null \
+      || git -C "$main_root" fetch --quiet origin "$branch:$branch" 2>/dev/null || true
+    new_branch=0
+  else
+    # Not a PR. Reopen an existing worktree with this number (covers issue worktrees whose
+    # branch name drifted from the issue title), or start new work on an open issue.
+    shopt -s nullglob; matches=("$HOME/worktrees/${repo}-${num}-"*/); shopt -u nullglob
+    if [ ${#matches[@]} -eq 1 ]; then
+      d=${matches[0]%/}
+      open_editor "$d"
+      echo "wt: $d  (existing worktree)"
+      exit 0
+    fi
+    title=$( (cd "$main_root" && gh issue view "$mode" --json title,state -q 'select(.state=="OPEN").title') 2>/dev/null ) \
+      || die "could not resolve PR or issue #$mode in $repo"
+    [ -n "$title" ] || die "issue #$mode in $repo is not open"
+    # Branch name from the issue title: lowercase, non-alphanumerics collapsed to "-",
+    # capped so window titles stay readable.
+    branch=$(echo "$title" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//' | cut -c1-40 | sed -E 's/-+$//')
+    [ -n "$branch" ] || die "could not derive a branch name from the title of issue #$mode"
+    echo "wt: issue #$mode → new branch '$branch'  (mention 'fixes #$mode' in the PR to link it)"
+    git -C "$main_root" fetch --quiet origin "$default"
+    base_ref="origin/$default"
+    new_branch=1
+  fi
 else
   branch=$mode
   git -C "$main_root" fetch --quiet origin "$branch:$branch" 2>/dev/null || true

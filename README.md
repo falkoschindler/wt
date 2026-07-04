@@ -43,7 +43,7 @@ ln -s "$PWD/wt/wt" ~/.local/bin/wt
 
 | Command | What it does | Run from |
 |---|---|---|
-| `wt <pr#>` | Inside a repo: worktree a PR's head branch for review/rework (number in the name; works with fork PRs). Outside a repo: open the existing worktree with that number, if exactly one matches. | in / outside repo |
+| `wt <number>` | Inside a repo: worktree a PR's head branch for review/rework (number in the name; works with fork PRs) — or, if `<number>` is an open issue, start new work on a fresh local branch named after its title. Outside a repo: open the existing worktree with that number, if exactly one matches. | in / outside repo |
 | `wt new <branch> [num]` | Fresh branch off the default branch; optional issue/ticket number. | inside the repo |
 | `wt <branch>` | Worktree an existing branch by name (local or on origin). | inside the repo |
 | `wt num <number>` | Add a number to the *current* worktree afterwards (renames + reopens). | inside a worktree |
@@ -56,6 +56,8 @@ ln -s "$PWD/wt/wt" ~/.local/bin/wt
 Worktrees are created under `~/worktrees/<repo>-[<number>-]<branch>`.
 
 `wt list` colours PR state GitHub-style (open green, merged purple, closed red, draft grey) and makes most cells clickable: the repo, PR number, milestone and assignee link to their GitHub pages, and a trailing ↗ opens the worktree in VS Code. Colour and links are emitted only when writing to a terminal, so piping the output stays clean (the ↗ falls back to the plain path).
+
+Starting from an issue works without a detour through `wt num`: `wt 123` on an open issue derives a branch name from the issue title and creates the worktree with the issue number in its name, so the window is identifiable from the start.
 
 `wt board` answers "who's working on what" straight from GitHub's native fields — no project board to hand-maintain. It lists every open issue and PR in the current repo that has an assignee, grouped by assignee (your own group first) and ordered by milestone, with each row linking to its issue/PR. A ✓ marks the ones you already have checked out as a worktree. It only reads, so it's safe to run any time, and the output pipes cleanly like `wt list`.
 
