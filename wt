@@ -19,6 +19,9 @@
 # Create/reuse + num + rm + board run from inside the target repo; list + prune work anywhere.
 # Outside a repo, a bare number opens a matching existing worktree if there's exactly one.
 # Worktrees live in ~/worktrees/<repo>[-<number>]-<sanitized-branch>.
+#
+# Any create/reuse form accepts --take: copy the newest Claude Code session of the current
+# directory into the worktree, so the conversation that led there shows up under /resume.
 
 set -euo pipefail
 
@@ -39,6 +42,31 @@ open_editor() {
     code "$1"
   fi
 }
+
+# For --take: copy the newest Claude Code session of the current directory's project
+# (its repo root, where sessions are keyed) into worktree $1's project dir, so the
+# conversation that led to the worktree appears there under /resume. It's a copy —
+# the original conversation stays where it is.
+take_session() {
+  [ "$take" = "1" ] || return 0
+  local here src dst latest
+  here=$(git rev-parse --show-toplevel 2>/dev/null) || here=$PWD
+  src="$HOME/.claude/projects/$(claude_slug "$here")"
+  dst="$HOME/.claude/projects/$(claude_slug "$1")"
+  [ "$src" != "$dst" ] || return 0
+  latest=$(ls -t "$src"/*.jsonl 2>/dev/null | head -n1) || true
+  [ -n "$latest" ] || { echo "wt: --take: no Claude Code session found for $here"; return 0; }
+  mkdir -p "$dst"
+  cp "$latest" "$dst/"
+  echo "wt: took the latest Claude Code session along ($(basename "$latest" .jsonl | cut -c1-8)…)"
+}
+
+# Pull --take out of the arguments (it may appear anywhere).
+take=0; args=()
+for a in "$@"; do
+  case "$a" in --take) take=1 ;; *) args+=("$a") ;; esac
+done
+set -- ${args[@]+"${args[@]}"}
 
 mode=${1:-help}
 case "$mode" in help|-h|--help) usage; exit 0 ;; esac
@@ -439,6 +467,7 @@ elif [[ "$mode" =~ ^[0-9]+$ ]]; then
     shopt -s nullglob; matches=("$HOME/worktrees/${repo}-${num}-"*/); shopt -u nullglob
     if [ ${#matches[@]} -eq 1 ]; then
       d=${matches[0]%/}
+      take_session "$d"
       open_editor "$d"
       echo "wt: $d  (existing worktree)"
       exit 0
@@ -472,6 +501,7 @@ mkdir -p "$HOME/worktrees"
 existing=$(git -C "$main_root" worktree list --porcelain | awk -v b="branch refs/heads/$branch" '
   /^worktree /{w=substr($0,10)} $0==b{print w; exit}')
 if [ -n "$existing" ] && [ "$existing" != "$wtpath" ]; then
+  take_session "$existing"
   open_editor "$existing"
   echo "wt: $existing  (branch: $branch, reusing existing worktree)"
   exit 0
@@ -499,5 +529,6 @@ if git -C "$wtpath" fetch --quiet origin "$branch" 2>/dev/null; then
   git -C "$wtpath" branch --quiet --set-upstream-to="origin/$branch" "$branch" 2>/dev/null || true
 fi
 
+take_session "$wtpath"
 open_editor "$wtpath"
 echo "wt: $wtpath  (branch: $branch)"
