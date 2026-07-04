@@ -412,12 +412,25 @@ slug=$(sanitize "$branch")
 wtpath="$HOME/worktrees/${repo}-${slug}"
 mkdir -p "$HOME/worktrees"
 
+# Reuse by branch, not by path: if the branch is already checked out in some worktree
+# (created under another name — issue number, PR number, or bare branch name), open that
+# one instead of failing to check the same branch out twice.
+existing=$(git -C "$main_root" worktree list --porcelain | awk -v b="branch refs/heads/$branch" '
+  /^worktree /{w=substr($0,10)} $0==b{print w; exit}')
+if [ -n "$existing" ] && [ "$existing" != "$wtpath" ]; then
+  open_editor "$existing"
+  echo "wt: $existing  (branch: $branch, reusing existing worktree)"
+  exit 0
+fi
+
 if git -C "$main_root" worktree list --porcelain | grep -qx "worktree $wtpath"; then
   echo "wt: reusing existing worktree"
+elif git -C "$main_root" show-ref --verify --quiet "refs/heads/$branch"; then
+  # The branch already exists locally (e.g. its worktree was removed, the branch kept) —
+  # check it out as-is, even on the `wt new`/issue path where -b would fail.
+  git -C "$main_root" worktree add "$wtpath" "$branch"
 elif [ "${new_branch}" = "1" ]; then
   git -C "$main_root" worktree add "$wtpath" -b "$branch" "$base_ref"
-elif git -C "$main_root" show-ref --verify --quiet "refs/heads/$branch"; then
-  git -C "$main_root" worktree add "$wtpath" "$branch"
 else
   git -C "$main_root" worktree add "$wtpath" -b "$branch" "origin/$branch"
 fi
