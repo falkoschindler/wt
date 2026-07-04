@@ -47,7 +47,7 @@ ln -s "$PWD/wt/wt" ~/.local/bin/wt
 | `wt new <branch> [num]` | Fresh branch off the default branch; optional issue/ticket number. | inside the repo |
 | `wt <branch>` | Worktree an existing branch by name (local or on origin). | inside the repo |
 | `wt num [<number>]` | Add a number to the *current* worktree afterwards (renames + reopens, moving any Claude Code session history along). Without a number, it uses the current branch's PR. | inside a worktree |
-| `wt list` | Table of every worktree under `~/worktrees`, with repo, PR number, state, milestone and assignee. | anywhere |
+| `wt list` | Table of every worktree under `~/worktrees`, with repo, linked issue, PR number, state, milestone and assignee. | anywhere |
 | `wt board` | Maintainer queue: open issues + PRs in the repo, grouped by assignee and ordered by milestone, with a ✓ where you already have a worktree. | inside the repo |
 | `wt prune` | Remove worktrees whose PR is merged or closed (asks first). | anywhere |
 | `wt rm` | Remove the *current* worktree and optionally delete its branch. | inside a worktree |
@@ -55,7 +55,7 @@ ln -s "$PWD/wt/wt" ~/.local/bin/wt
 
 Worktrees are created under `~/worktrees/<repo>-[<number>-]<branch>`.
 
-`wt list` colours PR state GitHub-style (open green, merged purple, closed red, draft grey) and makes most cells clickable: the repo, PR number, milestone and assignee link to their GitHub pages, and a trailing ↗ opens the worktree in VS Code. Colour and links are emitted only when writing to a terminal, so piping the output stays clean (the ↗ falls back to the plain path).
+`wt list` colours PR state GitHub-style (open green, merged purple, closed red, draft grey) and makes most cells clickable: the repo, issue, PR number, milestone and assignee link to their GitHub pages, and a trailing ↗ opens the worktree in VS Code. Colour and links are emitted only when writing to a terminal, so piping the output stays clean (the ↗ falls back to the plain path). The ISSUE column shows only what GitHub actually links (the PR's closing reference) — a `-` next to an open PR means the PR is missing its "Fixes #…".
 
 Starting from an issue works without a detour through `wt num`: `wt 123` on an open issue derives a branch name from the issue title and creates the worktree with the issue number in its name, so the window is identifiable from the start. Once a PR exists, `wt num` (no argument needed — it looks up the branch's PR) renames the worktree to the PR number and moves any Claude Code session history (`~/.claude/projects/…`) along, so past conversations stay attached to the renamed worktree.
 
