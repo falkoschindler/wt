@@ -69,8 +69,10 @@ Lead the window title with the worktree name so many windows stay distinguishabl
 
 ```jsonc
 // settings.json
-"window.title": "${rootName}${separator}${activeEditorShort}"
+"window.title": "${folderName}${separator}${activeEditorShort}"
 ```
+
+`${folderName}` (rather than `${rootName}`) keeps the worktree directory name — and thus the PR/issue number — in the title even when a worktree is opened via its `.code-workspace` file, where `${rootName}` would degrade to the workspace file's name plus a "(Workspace)" suffix. Caveat: `${folderName}` derives from the active editor, so the title stays empty until a file is opened.
 
 Trust the worktree parent folder once so new worktrees don't prompt: Command Palette → **Manage Workspace Trust** → **Add Folder** → `~/worktrees`.
 
