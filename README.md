@@ -49,7 +49,7 @@ ln -s "$PWD/wt/wt" ~/.local/bin/wt
 | `wt num [<number>]` | Add a number to the *current* worktree afterwards (renames + reopens, moving any Claude Code session history along). Without a number, it uses the current branch's PR. | inside a worktree |
 | `wt list` | Table of every worktree under `~/worktrees`, with repo, linked issue, PR number, state, milestone and assignee. | anywhere |
 | `wt board` | Maintainer queue: open issues + PRs in the repo, grouped by assignee and ordered by milestone, with a ✓ where you already have a worktree. | inside the repo |
-| `wt prune` | Remove worktrees whose PR is merged or closed (asks first). | anywhere |
+| `wt prune` | Remove worktrees whose PR is merged or closed, along with their local branches (asks first). | anywhere |
 | `wt rm` | Remove the *current* worktree and optionally delete its branch. | inside a worktree |
 | `wt help` | Show usage. | anywhere |
 

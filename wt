@@ -12,7 +12,8 @@
 #                           Claude Code session history along). No number: look up the branch's PR.
 #   wt list                 List ALL worktrees under ~/worktrees with repo, issue, PR, state, milestone and assignee.
 #   wt board                Maintainer queue: open issues + PRs in THIS repo grouped by assignee.
-#   wt prune                Remove worktrees whose PR is merged or closed (asks first).
+#   wt prune                Remove worktrees whose PR is merged or closed, along with
+#                           their local branches (asks first).
 #   wt rm                   Remove the CURRENT worktree (and optionally delete its branch).
 #   wt help                 Show this help.
 #
@@ -244,7 +245,7 @@ fi
 
 # --- prune: remove worktrees whose PR is merged or closed (any repo) ---
 if [ "$mode" = "prune" ]; then
-  paths=(); mains=(); labels=""
+  paths=(); mains=(); wbranches=(); prnums=(); labels=""
   shopt -s nullglob
   dirs=(); branches=()
   for d in "$HOME/worktrees"/*/; do
@@ -263,16 +264,17 @@ if [ "$mode" = "prune" ]; then
     if [ "$state" = "MERGED" ] || [ "$state" = "CLOSED" ]; then
       paths+=("$d")
       mains+=("$(dirname "$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)")")
+      wbranches+=("$wbranch"); prnums+=("$pnum")
       labels+="  $(color_for "$state")$state$C_RESET  $wbranch  ->  $d"$'\n'
     fi
   done
   if [ "${#paths[@]}" -eq 0 ]; then echo "wt: nothing to prune (no merged/closed-PR worktrees)"; exit 0; fi
   echo "Removable:"; printf '%s' "$labels"
-  ans=""; read -r -p "Remove these ${#paths[@]} worktree(s)? [y/N] " ans || ans=""
+  ans=""; read -r -p "Remove these ${#paths[@]} worktree(s) and their local branches? [y/N] " ans || ans=""
   case "$ans" in [yY]*) ;; *) echo "aborted"; exit 0 ;; esac
   i=0
   for p in "${paths[@]}"; do
-    m=${mains[$i]}; i=$((i+1))
+    m=${mains[$i]}; b=${wbranches[$i]}; pn=${prnums[$i]}; i=$((i+1))
     if err=$(git -C "$m" worktree remove "$p" 2>&1); then
       echo "removed $p"
     elif [ -z "$(git -C "$p" status --porcelain 2>/dev/null)" ] \
@@ -282,6 +284,18 @@ if [ "$mode" = "prune" ]; then
       echo "removed $p (contains submodules; forced)"
     else
       echo "skipped $p (${err#fatal: } — force with: git -C '$m' worktree remove --force '$p')"
+      continue
+    fi
+    if git -C "$m" branch -d "$b" 2>/dev/null; then
+      echo "deleted branch $b"
+    elif [ "$(git -C "$m" rev-parse --quiet --verify "refs/heads/$b" 2>/dev/null)" = \
+        "$( (cd "$m" && gh pr view "$pn" --json headRefOid -q .headRefOid) 2>/dev/null )" ] \
+        && git -C "$m" branch -D "$b" 2>/dev/null; then
+      # Squash/rebase merges leave the branch "not fully merged" in git's eyes. When the
+      # local tip is exactly the PR's head, every commit is on GitHub — forcing loses nothing.
+      echo "deleted branch $b"
+    else
+      echo "kept branch $b (has commits not in PR #$pn — delete with: git -C '$m' branch -D '$b')"
     fi
   done
   exit 0
