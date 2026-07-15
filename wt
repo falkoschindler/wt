@@ -457,7 +457,7 @@ if [ "$mode" = "num" ]; then
 fi
 
 # --- create/reuse: determine branch (+ optional number) ---
-num=""
+num=""; pr_head=0
 if [ "$mode" = "new" ]; then
   [ $# -ge 1 ] || die "usage: wt new <branch> [num]"
   branch=$1
@@ -468,11 +468,14 @@ if [ "$mode" = "new" ]; then
 elif [[ "$mode" =~ ^[0-9]+$ ]]; then
   command -v gh >/dev/null 2>&1 || die "gh not found (needed to resolve #$mode)"
   num=$mode
-  if branch=$( (cd "$main_root" && gh pr view "$mode" --json headRefName -q .headRefName) 2>/dev/null ); then
+  if pr_info=$( (cd "$main_root" && gh pr view "$mode" --json headRefName,isCrossRepository,headRepositoryOwner,headRepository \
+      -q '[.headRefName, (.isCrossRepository|tostring), (.headRepositoryOwner.login // "-"), (.headRepository.name // "-")] | @tsv') 2>/dev/null ); then
+    IFS=$'\t' read -r branch cross fork_owner fork_repo <<<"$pr_info"
     # pull/N/head works for fork PRs too; fall back to a plain branch fetch.
     git -C "$main_root" fetch --quiet origin "pull/$mode/head:$branch" 2>/dev/null \
       || git -C "$main_root" fetch --quiet origin "$branch:$branch" 2>/dev/null || true
     new_branch=0
+    pr_head=1
   else
     # Not a PR. Reopen an existing worktree with this number (covers issue worktrees whose
     # branch name drifted from the issue title), or start new work on an open issue.
@@ -526,19 +529,40 @@ elif git -C "$main_root" show-ref --verify --quiet "refs/heads/$branch"; then
   # check it out as-is, even on the `wt new`/issue path where -b would fail.
   git -C "$main_root" worktree add "$wtpath" "$branch"
 elif [ "${new_branch}" = "1" ]; then
-  git -C "$main_root" worktree add "$wtpath" -b "$branch" "$base_ref"
+  # --no-track: without it the new branch tracks origin/<default>, and a plain
+  # `git push` then dies with "upstream does not match the name of your current branch".
+  git -C "$main_root" worktree add --no-track "$wtpath" -b "$branch" "$base_ref"
 else
   git -C "$main_root" worktree add "$wtpath" -b "$branch" "origin/$branch"
 fi
 
-# Make `git pull` work without arguments. wt fetches branches with an explicit refspec
-# (or via pull/N/head), which creates the local branch but leaves no upstream and no
-# origin/<branch> remote-tracking ref. Fetch the branch the normal way (this updates
-# origin/<branch> through origin's configured refspec) and point the worktree branch at
-# it. Branches not on origin (e.g. fork-PR heads, brand-new `wt new` branches) make the
-# fetch fail, so they're left untouched.
+# Make `git pull`/`git push` work without arguments. wt fetches branches with an explicit
+# refspec (or via pull/N/head), which creates the local branch but leaves no upstream and
+# no origin/<branch> remote-tracking ref. Fetch the branch the normal way (this updates
+# origin/<branch> through origin's configured refspec) and point the worktree branch at it.
 if git -C "$wtpath" fetch --quiet origin "$branch" 2>/dev/null; then
   git -C "$wtpath" branch --quiet --set-upstream-to="origin/$branch" "$branch" 2>/dev/null || true
+elif [ "${cross:-}" = "true" ] && [ "${fork_owner:--}" != "-" ] && [ "${fork_repo:--}" != "-" ]; then
+  # Fork PR: same trick as `gh pr checkout` — point the branch's remote and pushRemote at
+  # the fork's URL, so plain `git pull`/`git push` talk to the fork instead of origin.
+  # Pushing works whenever the PR allows maintainer edits. Match origin's URL scheme so
+  # the user's existing SSH/HTTPS auth applies.
+  case "$(git -C "$main_root" remote get-url origin 2>/dev/null)" in
+    git@github.com:*|ssh://git@github.com/*) fork_url="git@github.com:${fork_owner}/${fork_repo}.git" ;;
+    *)                                       fork_url="https://github.com/${fork_owner}/${fork_repo}.git" ;;
+  esac
+  git -C "$wtpath" config "branch.$branch.remote" "$fork_url"
+  git -C "$wtpath" config "branch.$branch.pushRemote" "$fork_url"
+  git -C "$wtpath" config "branch.$branch.merge" "refs/heads/$branch"
+elif [ "$pr_head" != "1" ]; then
+  # The branch isn't on origin yet (brand-new `wt new`/issue branch, or a local-only
+  # branch): let the first plain push create origin/<branch> and set it as upstream.
+  # Scoped to THIS worktree so the main checkout keeps prompting. Same-repo PR heads are
+  # excluded via `pr_head`: their branch being gone from origin means the PR was likely
+  # merged/closed, and a plain push would silently re-create the branch — the loud
+  # "no upstream" error is the better outcome there.
+  git -C "$wtpath" config extensions.worktreeConfig true 2>/dev/null \
+    && git -C "$wtpath" config --worktree push.autoSetupRemote true 2>/dev/null || true
 fi
 
 take_session "$wtpath"
