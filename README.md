@@ -2,7 +2,7 @@
 
 > Git worktrees, one per task — each opened in its own editor window.
 
-`wt` is a tiny Bash helper that makes [git worktrees](https://git-scm.com/docs/git-worktree) practical for everyday work: one command creates (or reuses) a worktree for a pull request or branch, names it predictably, and opens it as its own VS Code window.
+`wt` is a tiny Bash helper that makes [git worktrees](https://git-scm.com/docs/git-worktree) practical for everyday work: one command creates (or reuses) a worktree for a pull request or branch, names it predictably, and opens it as its own VS Code window. If the worktree root contains exactly one `.code-workspace` file, that workspace is opened instead of the bare folder.
 
 It's built for **running several tasks in parallel** — e.g. multiple AI coding sessions or review sessions on different PRs at once — without them clashing on files in a single checkout. One window = one task = one worktree = one branch.
 
@@ -55,7 +55,7 @@ ln -s "$PWD/wt/wt" ~/.local/bin/wt
 
 Worktrees are created under `~/worktrees/<repo>-[<number>-]<branch>`.
 
-`wt list` colours PR state GitHub-style (open green, merged purple, closed red, draft grey) and makes most cells clickable: the repo, issue, PR number, milestone and assignee link to their GitHub pages, and a trailing ↗ opens the worktree in VS Code. Colour and links are emitted only when writing to a terminal, so piping the output stays clean (the ↗ falls back to the plain path). The ISSUE column shows only what GitHub actually links (the PR's closing reference) — a `-` next to an open PR means the PR is missing its "Fixes #…".
+`wt list` colours PR state GitHub-style (open green, merged purple, closed red, draft grey) and makes most cells clickable: the repo, issue, PR number, milestone and assignee link to their GitHub pages, and a trailing ↗ opens the worktree in VS Code (as its workspace, if it has one). Colour and links are emitted only when writing to a terminal, so piping the output stays clean (the ↗ falls back to the plain path). The ISSUE column shows only what GitHub actually links (the PR's closing reference) — a `-` next to an open PR means the PR is missing its "Fixes #…".
 
 Any create/reuse form accepts `--take`: it copies the newest Claude Code session of the current directory into the new worktree's session store, so the conversation that led to the work shows up there under `/resume` (the original stays where it is). Useful when a discussion in the main checkout turns into real work that belongs in its own worktree.
 

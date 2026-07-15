@@ -32,14 +32,26 @@ sanitize() { echo "$1" | tr '/' '-'; }
 claude_slug() { printf '%s' "$1" | sed 's/[^A-Za-z0-9]/-/g'; }
 usage() { awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0"; }
 
+# What VS Code should open for worktree $1: its single .code-workspace file (so
+# multi-root workspace setups come up correctly), or the folder itself when there is
+# none — or several, which is ambiguous, so the user picks inside VS Code. Works for
+# vscode://file URLs too: they load a .code-workspace as a workspace, not as JSON.
+open_target() {
+  local ws=("$1"/*.code-workspace)
+  if [ "${#ws[@]}" -eq 1 ] && [ -e "${ws[0]}" ]; then
+    printf '%s' "${ws[0]}"
+  else
+    printf '%s' "$1"
+  fi
+}
+
 # Open a worktree in VS Code. Set WT_NO_OPEN=1 to skip opening (e.g. when an agent/skill
-# drives wt and enters the worktree in the terminal, not a new window). When WT_NO_OPEN is
-# unset the call is byte-identical to the previous `code "$1"` — default behavior unchanged.
+# drives wt and enters the worktree in the terminal, not a new window).
 open_editor() {
   if [ "${WT_NO_OPEN:-0}" = "1" ]; then
     echo "wt: WT_NO_OPEN set — not opening editor ($1)"
   else
-    code "$1"
+    code "$(open_target "$1")"
   fi
 }
 
@@ -220,7 +232,7 @@ if [ "$mode" = "list" ] || [ "$mode" = "ls" ]; then
     assigneecell=$(cell "${r_assigneeurl[$i]}" "${r_assignee[$i]}" "$wassignee")
     # The ↗ glyph is the "open in VS Code" link (clickable in a terminal). Piped/non-terminal
     # output has no hyperlinks, so fall back to the plain path — still useful in scripts.
-    if [ -n "$LINKS" ]; then opencell=$(osc8 "vscode://file$d" "↗"); else opencell=$d; fi
+    if [ -n "$LINKS" ]; then opencell=$(osc8 "vscode://file$(open_target "$d")" "↗"); else opencell=$d; fi
     printf '%s  %s  %s  %s%-*s%s  %s  %s  %s  %s\n' \
       "$repocell" "$issuecell" "$prcell" "$(color_for "${r_state[$i]}")" "$wstate" "${r_state[$i]}" "$C_RESET" \
       "$milecell" "$branchcell" "$assigneecell" "$opencell"
