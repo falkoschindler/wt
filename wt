@@ -557,17 +557,38 @@ fi
 if git -C "$wtpath" fetch --quiet origin "$branch" 2>/dev/null; then
   git -C "$wtpath" branch --quiet --set-upstream-to="origin/$branch" "$branch" 2>/dev/null || true
 elif [ "${cross:-}" = "true" ] && [ "${fork_owner:--}" != "-" ] && [ "${fork_repo:--}" != "-" ]; then
-  # Fork PR: same trick as `gh pr checkout` — point the branch's remote and pushRemote at
-  # the fork's URL, so plain `git pull`/`git push` talk to the fork instead of origin.
-  # Pushing works whenever the PR allows maintainer edits. Match origin's URL scheme so
-  # the user's existing SSH/HTTPS auth applies.
+  # Fork PR: track the fork through a NAMED remote, reusing any remote that already points
+  # at the fork (e.g. one added by VS Code's GitHub PR extension). `gh pr checkout` instead
+  # writes the fork's bare URL into branch.<name>.remote/pushRemote — that pushes fine, but
+  # a URL has no fetch refspec, so pushes never update the remote-tracking ref and editors
+  # keep showing the pushed commits as pushable until the next fetch. A named remote doesn't
+  # have that problem. Pushing works whenever the PR allows maintainer edits. Match origin's
+  # URL scheme so the user's existing SSH/HTTPS auth applies.
   case "$(git -C "$main_root" remote get-url origin 2>/dev/null)" in
     git@github.com:*|ssh://git@github.com/*) fork_url="git@github.com:${fork_owner}/${fork_repo}.git" ;;
     *)                                       fork_url="https://github.com/${fork_owner}/${fork_repo}.git" ;;
   esac
-  git -C "$wtpath" config "branch.$branch.remote" "$fork_url"
-  git -C "$wtpath" config "branch.$branch.pushRemote" "$fork_url"
-  git -C "$wtpath" config "branch.$branch.merge" "refs/heads/$branch"
+  fork_remote=""
+  while read -r rname rurl _; do
+    case "${rurl%.git}" in
+      "git@github.com:${fork_owner}/${fork_repo}" | \
+      "ssh://git@github.com/${fork_owner}/${fork_repo}" | \
+      "https://github.com/${fork_owner}/${fork_repo}") fork_remote=$rname; break ;;
+    esac
+  done < <(git -C "$wtpath" remote -v)
+  if [ -z "$fork_remote" ] && git -C "$wtpath" remote add "$fork_owner" "$fork_url" 2>/dev/null; then
+    fork_remote=$fork_owner
+  fi
+  if [ -n "$fork_remote" ]; then
+    git -C "$wtpath" fetch --quiet "$fork_remote" "$branch" 2>/dev/null || true
+    git -C "$wtpath" branch --quiet --set-upstream-to="$fork_remote/$branch" "$branch" 2>/dev/null || true
+  else
+    # A remote named after the fork owner exists but points elsewhere — fall back to the
+    # bare-URL trick rather than guessing another name.
+    git -C "$wtpath" config "branch.$branch.remote" "$fork_url"
+    git -C "$wtpath" config "branch.$branch.pushRemote" "$fork_url"
+    git -C "$wtpath" config "branch.$branch.merge" "refs/heads/$branch"
+  fi
 elif [ "$pr_head" != "1" ]; then
   # The branch isn't on origin yet (brand-new `wt new`/issue branch, or a local-only
   # branch): let the first plain push create origin/<branch> and set it as upstream.
