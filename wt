@@ -126,10 +126,9 @@ color_for() {
 # as it may have spaces. Without a PR, falls back to the worktree's issue (see lookup_issue).
 lookup_pr() {
   command -v gh >/dev/null 2>&1 || return 0
-  local line head rest num=-1 remote url owner=""
+  local line head num remote url owner=""
   head=$(git -C "$1" rev-parse --verify -q HEAD) || head=""
-  rest=$(basename "$1"); rest=${rest#"$(wt_repo "$1")-"}
-  [[ "$rest" =~ ^([0-9]+)- ]] && num=${BASH_REMATCH[1]}
+  num=$(wt_num "$1"); num=${num:--1}
   # Owner of the repo the branch pushes to: a remote name or, as `gh pr checkout` sets it, a URL.
   if remote=$(git -C "$1" config "branch.$2.pushRemote" || git -C "$1" config remote.pushDefault || git -C "$1" config "branch.$2.remote"); then
     url=$(git -C "$1" remote get-url --push "$remote" 2>/dev/null) || url=$remote
@@ -137,22 +136,33 @@ lookup_pr() {
     case "$url" in https://github.com/*/*|git@github.com:*/*|ssh://git@github.com/*/*) owner=${url%/*}; owner=${owner##*[/:]} ;; esac
   fi
   # --head matches the branch name in every fork, so a name alone can pick another PR. Prefer
-  # the PR whose head commit is HEAD, then the PR numbered in the worktree name, then the PRs
-  # from the owner the branch pushes to (open first). Without a known owner, take only a sole
-  # open PR: guessing a closed/merged one would let prune remove the worktree.
-  local oid guess
-  line=$( ( cd "$1" && WT_HEAD=$head WT_NUM=$num WT_OWNER=$owner gh pr list --head "$2" --state all --json number,state,isDraft,url,milestone,assignees,headRefOid,headRepositoryOwner \
-      -q '(map(select(.headRefOid == $ENV.WT_HEAD)) | .[0]) // (map(select(.number == ($ENV.WT_NUM | tonumber))) | .[0]) // (if $ENV.WT_OWNER != "" then map(select((.headRepositoryOwner.login // "" | ascii_downcase) == ($ENV.WT_OWNER | ascii_downcase))) | (map(select(.state == "OPEN")) | .[0]) // (.[0] | if . then .guess = true else . end) else map(select(.state == "OPEN")) | if length == 1 then .[0] else empty end end) | if . then "\(.headRefOid) \(.guess // false) \(.number) \(if .isDraft and .state=="OPEN" then "DRAFT" else .state end) \(.url) \(.milestone.number // "-") \(.assignees[0].login // "-") \(.milestone.title // "-")" else empty end' \
-      2>/dev/null ) ) || true
-  read -r oid guess line <<<"$line"
-  # A closed/merged PR picked by owner alone is skipped when HEAD is not contained in its head
-  # (new work on a reused branch name, or a rebase after the merge): better unlisted than pruned.
-  # A head never pulled locally can't be checked.
-  if [ "$guess" = true ] && git -C "$1" cat-file -e "$oid^{commit}" 2>/dev/null \
-      && ! git -C "$1" merge-base --is-ancestor HEAD "$oid" 2>/dev/null; then line=""; fi
-  [ -n "$line" ] || { lookup_issue "$1"; return 0; }
-  local prnum state url milenum assignee mile issue
+  # the PR whose head commit is HEAD (open first), then the PR numbered in the worktree name,
+  # then the PRs from the owner the branch pushes to (open first). Without a known owner, take
+  # only a sole open PR: guessing a closed/merged one would let prune remove the worktree.
+  # gh's default --limit of 30 is too few for branch names that many forks share, e.g. main.
+  local filter='
+    (map(select(.headRefOid == $ENV.WT_HEAD)) | (map(select(.state == "OPEN")) | .[0]) // .[0])
+    // (map(select(.number == ($ENV.WT_NUM | tonumber))) | .[0])
+    // (if $ENV.WT_OWNER != "" then
+         map(select((.headRepositoryOwner.login // "" | ascii_downcase) == ($ENV.WT_OWNER | ascii_downcase)))
+         | (map(select(.state == "OPEN")) | .[0]) // .[0]
+       else
+         map(select(.state == "OPEN")) | if length == 1 then .[0] else empty end
+       end)
+    | if . then "\(.headRefOid) \(.number) \(if .isDraft and .state=="OPEN" then "DRAFT" else .state end) \(.url) \(.milestone.number // "-") \(.assignees[0].login // "-") \(.milestone.title // "-")" else empty end'
+  line=$( ( cd "$1" && WT_HEAD=$head WT_NUM=$num WT_OWNER=$owner gh pr list --head "$2" --state all --limit 200 \
+      --json number,state,isDraft,url,milestone,assignees,headRefOid,headRepositoryOwner -q "$filter" 2>/dev/null ) ) || true
+  local oid prnum state url milenum assignee mile issue
+  read -r oid line <<<"$line"
   read -r prnum state url milenum assignee mile <<<"$line"
+  # A closed/merged PR is skipped when its head is local and HEAD is not contained in it (new
+  # work on a reused branch name, or commits past a merged PR): better unlisted than pruned.
+  # A head never pulled locally can't be checked. A head-commit match passes trivially.
+  case "$state" in MERGED|CLOSED)
+    if git -C "$1" cat-file -e "$oid^{commit}" 2>/dev/null \
+        && ! git -C "$1" merge-base --is-ancestor HEAD "$oid" 2>/dev/null; then line=""; fi ;;
+  esac
+  [ -n "$line" ] || { lookup_issue "$1"; return 0; }
   issue=$(closing_issue "$1" "$prnum")
   printf '%s %s %s %s %s %s %s\n' "$prnum" "$state" "$url" "$milenum" "$assignee" "$issue" "$mile"
 }
@@ -165,10 +175,8 @@ lookup_pr() {
 # prunable. A number that resolves to a PR (renamed branch whose PR no longer matches the
 # head) is skipped via the URL check — showing it as an issue would mislabel it.
 lookup_issue() {
-  local repo base rest num line
-  repo=$(wt_repo "$1"); base=$(basename "$1"); rest=${base#"$repo-"}
-  [[ "$rest" =~ ^([0-9]+)- ]] || return 0
-  num=${BASH_REMATCH[1]}
+  local num line
+  num=$(wt_num "$1"); [ -n "$num" ] || return 0
   line=$( ( cd "$1" && gh issue view "$num" --json number,state,url,milestone,assignees \
       -q 'select(.url|test("/issues/")) | "- \(if .state=="OPEN" then "issue" else "closed" end) - \(.milestone.number // "-") \(.assignees[0].login // "-") \(.number) \(.milestone.title // "-")"' \
       2>/dev/null ) ) || true
@@ -193,6 +201,14 @@ closing_issue() {
 
 # Repo name that owns worktree dir $1 (basename of its main checkout).
 wt_repo() { basename "$(dirname "$(git -C "$1" rev-parse --path-format=absolute --git-common-dir)")"; }
+
+# Number in the name of worktree dir $1 ("<repo>-<number>-…", as `wt <number>` and `wt num`
+# create it), or nothing.
+wt_num() {
+  local rest; rest=$(basename "$1"); rest=${rest#"$(wt_repo "$1")-"}
+  [[ "$rest" =~ ^([0-9]+)- ]] && printf '%s' "${BASH_REMATCH[1]}"
+  return 0
+}
 
 # https base URL of the GitHub repo that owns worktree dir $1, or nothing (non-GitHub origins).
 repo_url() {

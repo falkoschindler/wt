@@ -80,16 +80,28 @@ run_case C "[$(pr 7 MERGED "$c1")]"
 grep -Eq ' 7 +MERGED ' "$tmp/row.txt"; check "C shows merged PR 7" $?
 grep -q 'Removable:' "$tmp/prune.txt"; check "C prune offers the merged worktree" $?
 
-# D: the worktree is named for its PR (repo-7-…). That PR is MERGED, but its head is no
-# longer the worktree's HEAD (the branch moved on), and an older closed PR with the same
-# branch name is listed first. Must show PR 7 MERGED.
+# old is a head that was never pulled ("Update branch" or a suggestion applied on GitHub).
+old=0123456789abcdef0123456789abcdef01234567
+
+# D: the worktree is named for its PR (repo-7-…). That PR is MERGED on a head that was never
+# pulled, and an older closed PR with the same branch name is listed first. Must show PR 7 MERGED.
 git -C "$src" worktree add -q -b feature-z "$HOME/worktrees/repo-7-feature-z" trunk
 git -C "$HOME/worktrees/repo-7-feature-z" commit -q --allow-empty -m c2
-printf '%s' "[$(pr 3 CLOSED "$c0"),$(pr 7 MERGED "$c1")]" >"$tmp/prs.json"
+printf '%s' "[$(pr 3 CLOSED "$c0"),$(pr 7 MERGED "$old")]" >"$tmp/prs.json"
 export STUB_PRS="$tmp/prs.json"
 row_z=$(bash "$WT" list 2>&1 | grep -F 'feature-z')
 echo "  row:   $row_z"
 grep -Eq ' 7 +MERGED ' <<<"$row_z"; check "D shows PR 7 named in the worktree, not older PR 3" $?
+
+# D2: same worktree, but PR 7's head is c1: local, and HEAD (c2) is not contained in it, so
+# the branch holds new work past the merged PR. The number alone must not make it MERGED,
+# and prune must not offer the worktree.
+printf '%s' "[$(pr 3 CLOSED "$c0"),$(pr 7 MERGED "$c1")]" >"$tmp/prs.json"
+row_z=$(bash "$WT" list 2>&1 | grep -F 'feature-z')
+echo "  row:   $row_z"
+[ -n "$row_z" ] && ! grep -q 'MERGED' <<<"$row_z"; check "D2 numbered worktree with commits past its merged PR shows no MERGED" $?
+prune_z=$(echo n | bash "$WT" prune 2>&1)
+! grep -q 'feature-z' <<<"$prune_z"; check "D2 prune does not offer it" $?
 
 # E: same worktree (HEAD = c2). PR 7 (named in the worktree) is MERGED on an old head, but
 # PR 8 is OPEN on HEAD itself. The head-commit match must win over the number in the name.
@@ -99,8 +111,6 @@ echo "  row:   $row_e"
 grep -Eq ' 8 +OPEN ' <<<"$row_e"; check "E head-commit match (PR 8) beats the number in the name (PR 7)" $?
 
 # The cases below have a branch that pushes to a known remote, so the PR's head owner decides.
-# old is a head that was never pulled ("Update branch" or a suggestion applied on GitHub).
-old=0123456789abcdef0123456789abcdef01234567
 row_of() { bash "$WT" list 2>&1 | grep -F "$1"; }
 
 # F: HEAD is behind the merged PR's head, the worktree has no number, and another fork has
@@ -159,6 +169,11 @@ git -C "$src" remote set-url --push fork/alice git@github.com:someone/repo.git
 git -C "$src" config branch.feature-k.remote fork/alice
 printf '%s' "[$(pr 15 MERGED "$old"),$(pr 16 CLOSED "$old" someone),$(pr 17 OPEN "$old" someone)]" >"$tmp/prs.json"
 grep -Eq ' 17 +OPEN ' <<<"$(row_of feature-k)"; check "L the push URL's owner decides, and its open PR 17 wins" $?
+
+# M: two PRs have HEAD itself as head and the newer one, listed first, is CLOSED (closed and
+# reopened as a new PR from the same commit). Among head matches the open one must win.
+printf '%s' "[$(pr 19 CLOSED "$c1"),$(pr 18 OPEN "$c1")]" >"$tmp/prs.json"
+grep -Eq ' 18 +OPEN ' <<<"$(row_of feature-x)"; check "M among head-commit matches the open PR 18 beats the newer closed PR 19" $?
 
 echo
 if [ "$fails" -eq 0 ]; then echo "all checks passed"; else echo "$fails check(s) failed"; fi
