@@ -5,6 +5,7 @@
 # PR lists; the test checks what `wt list` and `wt prune` report for one worktree.
 # Usage: tests/lookup_pr_test.sh [path/to/wt]     (exit 0 = all pass)
 set -uo pipefail
+command -v jq >/dev/null 2>&1 || { echo "needs jq (the gh stub filters with it)"; exit 2; }
 
 WT=${1:-"$(dirname "$0")/../wt"}
 WT=$(cd "$(dirname "$WT")" && pwd)/$(basename "$WT")
