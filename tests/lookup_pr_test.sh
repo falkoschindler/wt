@@ -40,8 +40,8 @@ c1=$(git -C "$src" rev-parse HEAD)
 git -C "$src" checkout -q trunk
 git -C "$src" worktree add -q "$HOME/worktrees/repo-feature-x" feature-x
 
-pr() { # number state head-sha
-  printf '{"number":%s,"state":"%s","isDraft":false,"url":"https://github.com/example/repo/pull/%s","milestone":null,"assignees":[],"headRefOid":"%s"}' "$1" "$2" "$1" "$3"
+pr() { # number state head-sha [head-owner]
+  printf '{"number":%s,"state":"%s","isDraft":false,"url":"https://github.com/example/repo/pull/%s","milestone":null,"assignees":[],"headRefOid":"%s","headRepositoryOwner":{"login":"%s"}}' "$1" "$2" "$1" "$3" "${4:-example}"
 }
 
 fails=0
@@ -96,6 +96,68 @@ printf '%s' "[$(pr 7 MERGED "$c1"),$(pr 8 OPEN "$(git -C "$HOME/worktrees/repo-7
 row_e=$(bash "$WT" list 2>&1 | grep -F 'feature-z')
 echo "  row:   $row_e"
 grep -Eq ' 8 +OPEN ' <<<"$row_e"; check "E head-commit match (PR 8) beats the number in the name (PR 7)" $?
+
+# The cases below have a branch that pushes to a known remote, so the PR's head owner decides.
+# old is a head that was never pulled ("Update branch" or a suggestion applied on GitHub).
+old=0123456789abcdef0123456789abcdef01234567
+row_of() { bash "$WT" list 2>&1 | grep -F "$1"; }
+
+# F: HEAD is behind the merged PR's head, the worktree has no number, and another fork has
+# an open PR from a branch of the same name. Must show the own merged PR and offer to prune.
+git -C "$src" worktree add -q -b feature-f "$HOME/worktrees/repo-feature-f" trunk
+git -C "$src" config branch.feature-f.remote origin
+printf '%s' "[$(pr 11 OPEN "$old" someone),$(pr 10 MERGED "$old")]" >"$tmp/prs.json"
+row_f=$(row_of feature-f); echo "  row:   $row_f"
+grep -Eq ' 10 +MERGED ' <<<"$row_f"; check "F shows the own merged PR 10, not the other fork's open PR 11" $?
+prune_f=$(echo n | bash "$WT" prune 2>&1)
+grep -q 'feature-f' <<<"$prune_f"; check "F prune offers the merged worktree" $?
+git -C "$src" worktree remove "$HOME/worktrees/repo-feature-f"
+
+# G: started with `wt <issue>`, so the name holds issue 42, not the PR number. Another fork's
+# closed PR is listed first. Must show the own merged PR 50.
+git -C "$src" worktree add -q -b fix-thing "$HOME/worktrees/repo-42-fix-thing" trunk
+git -C "$src" config branch.fix-thing.remote origin
+printf '%s' "[$(pr 49 CLOSED "$old" someone),$(pr 50 MERGED "$old")]" >"$tmp/prs.json"
+row_g=$(row_of fix-thing); echo "  row:   $row_g"
+grep -Eq ' 50 +MERGED ' <<<"$row_g"; check "G shows the own merged PR 50 for an issue-numbered worktree" $?
+
+# H: the branch pushes to origin (owner example) and only other forks have PRs from a branch
+# of that name. Must show no PR, and owners compare case-insensitively.
+printf '%s' "[$(pr 12 OPEN "$old" someone),$(pr 13 MERGED "$old" other)]" >"$tmp/prs.json"
+row_h=$(row_of fix-thing); echo "  row:   $row_h"
+[ -n "$row_h" ] && ! grep -Eq ' (12|13) ' <<<"$row_h"; check "H shows no PR from other forks" $?
+printf '%s' "[$(pr 50 MERGED "$old" Example)]" >"$tmp/prs.json"
+grep -Eq ' 50 +MERGED ' <<<"$(row_of fix-thing)"; check "H owner match ignores case" $?
+
+# I: as `gh pr checkout` sets it, the branch pushes to a bare fork URL. Must show that fork's PR.
+git -C "$src" config branch.fix-thing.remote https://github.com/someone/repo.git
+printf '%s' "[$(pr 50 MERGED "$old"),$(pr 49 CLOSED "$old" someone)]" >"$tmp/prs.json"
+grep -Eq ' 49 +CLOSED ' <<<"$(row_of fix-thing)"; check "I a bare-URL push remote selects its owner's PR 49" $?
+
+# J: a reused branch name in the same repo. The own closed PR's head (c1) is local and HEAD has
+# a commit beyond it, so the worktree holds new work. Must not claim CLOSED or offer a prune.
+git -C "$src" worktree add -q -b feature-j "$HOME/worktrees/repo-feature-j" "$c1"
+git -C "$HOME/worktrees/repo-feature-j" commit -q --allow-empty -m c3
+git -C "$src" config branch.feature-j.remote origin
+printf '%s' "[$(pr 14 CLOSED "$c1")]" >"$tmp/prs.json"
+row_j=$(row_of feature-j); echo "  row:   $row_j"
+[ -n "$row_j" ] && ! grep -q 'CLOSED' <<<"$row_j"; check "J row has no CLOSED when HEAD is ahead of the closed PR" $?
+prune_j=$(echo n | bash "$WT" prune 2>&1)
+grep -Eq 'nothing to prune|aborted' <<<"$prune_j" && ! grep -q 'feature-j' <<<"$prune_j"; check "J prune does not offer it" $?
+
+# K: the merged PR's head (c1) was fetched and HEAD (c0) is behind it. Must show MERGED.
+git -C "$src" worktree add -q -b feature-k "$HOME/worktrees/repo-feature-k" "$c0"
+git -C "$src" config branch.feature-k.remote origin
+printf '%s' "[$(pr 15 MERGED "$c1")]" >"$tmp/prs.json"
+grep -Eq ' 15 +MERGED ' <<<"$(row_of feature-k)"; check "K shows the merged PR 15 when HEAD is behind its fetched head" $?
+
+# L: the remote's name has a slash and it fetches from example but pushes to someone (the
+# push URL decides). Among the owner's PRs an open one beats a closed one listed first.
+git -C "$src" remote add fork/alice https://github.com/example/repo.git
+git -C "$src" remote set-url --push fork/alice git@github.com:someone/repo.git
+git -C "$src" config branch.feature-k.remote fork/alice
+printf '%s' "[$(pr 15 MERGED "$old"),$(pr 16 CLOSED "$old" someone),$(pr 17 OPEN "$old" someone)]" >"$tmp/prs.json"
+grep -Eq ' 17 +OPEN ' <<<"$(row_of feature-k)"; check "L the push URL's owner decides, and its open PR 17 wins" $?
 
 echo
 if [ "$fails" -eq 0 ]; then echo "all checks passed"; else echo "$fails check(s) failed"; fi
