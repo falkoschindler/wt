@@ -12,7 +12,7 @@ WT=$(cd "$(dirname "$WT")" && pwd)/$(basename "$WT")
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-export HOME="$tmp/home" GIT_CONFIG_GLOBAL=/dev/null
+export HOME="$tmp/home" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
 mkdir -p "$HOME/worktrees" "$tmp/bin"
 

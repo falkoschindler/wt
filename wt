@@ -128,7 +128,7 @@ lookup_pr() {
   command -v gh >/dev/null 2>&1 || return 0
   local line head num remote url owner=""
   head=$(git -C "$1" rev-parse --verify -q HEAD) || head=""
-  num=$(wt_num "$1"); num=${num:--1}
+  num=$(wt_num "$1")
   # Owner of the repo the branch pushes to: a remote name or, as `gh pr checkout` sets it, a URL.
   if remote=$(git -C "$1" config "branch.$2.pushRemote" || git -C "$1" config remote.pushDefault || git -C "$1" config "branch.$2.remote"); then
     url=$(git -C "$1" remote get-url --push "$remote" 2>/dev/null) || url=$remote
@@ -142,7 +142,7 @@ lookup_pr() {
   # gh's default --limit of 30 is too few for branch names that many forks share, e.g. main.
   local filter='
     (map(select(.headRefOid == $ENV.WT_HEAD)) | (map(select(.state == "OPEN")) | .[0]) // .[0])
-    // (map(select(.number == ($ENV.WT_NUM | tonumber))) | .[0])
+    // (map(select((.number | tostring) == $ENV.WT_NUM)) | .[0])
     // (if $ENV.WT_OWNER != "" then
          map(select((.headRepositoryOwner.login // "" | ascii_downcase) == ($ENV.WT_OWNER | ascii_downcase)))
          | (map(select(.state == "OPEN")) | .[0]) // .[0]
