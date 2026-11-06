@@ -499,9 +499,10 @@ if [ "$mode" = "num" ]; then
     num=$1
   else
     # No number given: use the PR of the current branch (typical after creating a PR
-    # in a worktree that started from an issue or a bare branch).
+    # in a worktree that started from an issue or a bare branch). lookup_pr, not a plain
+    # `gh pr list --head`: that matches the branch name in every fork.
     command -v gh >/dev/null 2>&1 || die "gh not found (pass a number: wt num <number>)"
-    num=$( ( cd "$cur" && gh pr list --head "$branch" --state all --json number -q '.[0].number' ) 2>/dev/null ) || true
+    num=$(lookup_pr "$cur" "$branch" | cut -d' ' -f1); [ "$num" != "-" ] || num=""
     [ -n "$num" ] || die "no PR found for branch '$branch' (pass a number: wt num <number>)"
     echo "wt: using PR #$num"
   fi
