@@ -545,6 +545,28 @@ elif [[ "$mode" =~ ^[0-9]+$ ]]; then
     # pull/N/head works for fork PRs too; fall back to a plain branch fetch.
     git -C "$main_root" fetch --quiet origin "pull/$mode/head:$branch" 2>/dev/null \
       || git -C "$main_root" fetch --quiet origin "$branch:$branch" 2>/dev/null || true
+    # Fork PRs share head names ("main", "patch-1") and a kept branch can predate a push, so
+    # the local branch may hold other commits: fast-forward it, keep commits on top, else stop.
+    if git -C "$main_root" fetch --quiet origin "pull/$mode/head" 2>/dev/null \
+        && pr_sha=$(git -C "$main_root" rev-parse FETCH_HEAD) \
+        && tip=$(git -C "$main_root" rev-parse --verify --quiet "refs/heads/$branch") \
+        && ! git -C "$main_root" merge-base --is-ancestor "$pr_sha" "$tip"; then
+      holder=$(git -C "$main_root" worktree list --porcelain | awk -v b="branch refs/heads/$branch" '
+        /^worktree /{w=substr($0,10)} $0==b{print w; exit}')
+      if ! [ "$holder" -ef "$main_root" ] && [ "$branch" != "$default" ] \
+          && git -C "$main_root" merge-base --is-ancestor "$tip" "$pr_sha"; then
+        if [ -n "$holder" ]; then
+          git -C "$holder" merge --ff-only --quiet "$pr_sha" || die "could not fast-forward $holder to PR #$mode"
+        else
+          git -C "$main_root" update-ref "refs/heads/$branch" "$pr_sha" "$tip"
+        fi
+        echo "wt: fast-forwarded '$branch' to PR #$mode's new commits"
+      elif [ "$holder" -ef "$HOME/worktrees/${repo}-${mode}-$(sanitize "$branch")" ]; then
+        echo "wt: '$branch' has diverged from PR #$mode (your commits, or a force-push); merge or rebase onto ${pr_sha:0:9}" >&2
+      else
+        die "local branch '$branch' is not PR #$mode (another PR's branch of that name, or a force-push)${holder:+, checked out at $holder}. Use another name: git fetch origin pull/$mode/head:pr-$mode && wt pr-$mode"
+      fi
+    fi
     new_branch=0
     pr_head=1
   else
