@@ -75,9 +75,12 @@ echo "$out" | grep -q 'reusing existing worktree'; [ $? -ne 0 ]; check "C wt 2 d
 
 git -C "$repo" worktree remove "$w1"
 wt 2
+echo "$out" | grep -q 'worktree add --detach'; check "D the hint opens a detached worktree" $?
+echo "$out" | grep -q 'wt pr-'; [ $? -ne 0 ]; check "D the hint does not point at a wt pr-N branch" $?
 [ "$rc" -ne 0 ]; check "D wt 2 stops when the kept branch patch-1 holds PR 1 (rc=$rc)" $?
 [ ! -e "$w2" ] || [ "$(head_of "$w2")" = "$p2" ]; check "D no repo-2 worktree with PR 1's code" $?
 
+git -C "$repo" checkout -q -b other  # main is now a plain branch, not the checked-out one
 main0=$(git -C "$repo" rev-parse main)
 wt 3
 [ "$rc" -ne 0 ]; check "E wt 3 (fork head 'main') stops (rc=$rc)" $?
