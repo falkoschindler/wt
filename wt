@@ -565,14 +565,20 @@ elif [[ "$mode" =~ ^[0-9]+$ ]]; then
       holder=$(git -C "$main_root" worktree list --porcelain | awk -v b="branch refs/heads/$branch" '
         /^worktree /{w=substr($0,10)} $0==b{print w; exit}')
       # Is it this PR's branch? wt sets branch.<name>.remote to the fork's remote for a fork PR,
-      # origin otherwise. Without it (the fork fetch failed), guess from the commits.
+      # origin otherwise ("." tracks a local branch, so it is local too). Foreign only when the
+      # remote's GitHub owner/repo and the PR's fork are both known and differ. Without that
+      # (no config because the fork fetch failed, a removed remote, a URL gh_slug can't read,
+      # a deleted fork) fall back to the worktree path, then to the commits.
       ours=""
       r=$(git -C "$main_root" config "branch.$branch.remote" || true)
       url=$(git -C "$main_root" config "remote.$r.url" 2>/dev/null || echo "$r")
+      rslug=$(gh_slug "$url")
       if [ "$cross" != "true" ]; then
-        case "$r" in ""|origin) ours=1 ;; *) ours=0 ;; esac
-      elif [ -n "$r" ]; then
-        [ "$(gh_slug "$url")" = "$(gh_slug "https://github.com/$fork_owner/$fork_repo")" ] && ours=1 || ours=0
+        case "$r" in ""|origin|.) ours=1 ;; *) ours=0 ;; esac
+      elif [ "$r" = origin ]; then
+        ours=0  # a fork PR's head is not on origin, whatever origin's URL looks like
+      elif [ -n "$rslug" ] && [ "$fork_owner" != "-" ] && [ "$fork_repo" != "-" ]; then
+        [ "$rslug" = "$(gh_slug "https://github.com/$fork_owner/$fork_repo")" ] && ours=1 || ours=0
       elif [ "$holder" -ef "$HOME/worktrees/${repo}-${mode}-$(sanitize "$branch")" ]; then
         ours=1
       fi

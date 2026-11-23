@@ -181,14 +181,31 @@ printf '12 fx2 true wt-test-hank\n13 fx2 true wt-test-ivy\n' >>"$tmp/prs"
 wt 13
 wt 12
 [ "$rc" -ne 0 ]; check "P wt 12 stops on ivy's branch that contains PR 12 (rc=$rc)" $?
-# Identity compares GitHub owner/repo: case-insensitive, and the host must be github.com.
+# Identity compares GitHub owner/repo, case-insensitive.
+w13="$HOME/worktrees/repo-13-fx2"
 git -C "$repo" config branch.fx2.remote https://github.com/WT-Test-Ivy/no-such-repo.git
 i2=$(commit "$src" "PR13 follow-up"); setpr 13 "$i2" wt-test-ivy fx2
 wt 13
-[ "$rc" -eq 0 ] && [ "$(head_of "$HOME/worktrees/repo-13-fx2")" = "$i2" ]; check "P owner case does not matter (rc=$rc)" $?
+[ "$rc" -eq 0 ] && [ "$(head_of "$w13")" = "$i2" ]; check "P owner case does not matter (rc=$rc)" $?
+
+# Unknown ownership is not foreign. A remote that is not a GitHub URL, a removed remote, a
+# fork gh no longer knows, or a same-repo branch tracking a local branch (".") cannot be
+# compared; the PR's own worktree still opens and follows the PR.
 git -C "$repo" config branch.fx2.remote https://elsewhere.example/wt-test-ivy/no-such-repo.git
 wt 13
-[ "$rc" -ne 0 ]; check "P same owner/repo on another host is not the fork (rc=$rc)" $?
+[ "$rc" -eq 0 ] && [ "$(head_of "$w13")" = "$i2" ]; check "Q a non-GitHub remote URL is unknown, not foreign (rc=$rc)" $?
+git -C "$repo" config branch.fx2.remote gone
+i3=$(commit "$src" "PR13 after the remote was removed"); setpr 13 "$i3" wt-test-ivy fx2
+wt 13
+[ "$rc" -eq 0 ] && [ "$(head_of "$w13")" = "$i3" ]; check "Q a removed remote is unknown, not foreign (rc=$rc)" $?
+git -C "$repo" config branch.fx2.remote wt-test-ivy
+grep -v '^13 ' "$tmp/prs" >"$tmp/prs.new"; mv "$tmp/prs.new" "$tmp/prs"; echo "13 fx2 true -" >>"$tmp/prs"
+i4=$(commit "$src" "PR13 after the fork was deleted"); setpr 13 "$i4"
+wt 13
+[ "$rc" -eq 0 ] && [ "$(head_of "$w13")" = "$i4" ]; check "Q a deleted fork is unknown, not foreign (rc=$rc)" $?
+git -C "$repo" config branch.samefeat.remote .
+wt 9
+[ "$rc" -eq 0 ] && [ "$(head_of "$ws")" = "$my9" ]; check "Q a same-repo branch tracking a local branch is ours (rc=$rc)" $?
 
 echo
 [ "$fails" -eq 0 ] && echo "all checks passed" || echo "$fails check(s) failed"
