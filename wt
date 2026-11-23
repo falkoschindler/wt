@@ -28,6 +28,16 @@ set -euo pipefail
 
 die() { echo "wt: $*" >&2; exit 1; }
 sanitize() { echo "$1" | tr '/' '-'; }
+gh_slug() { # GitHub remote URL -> lowercase owner/repo; empty for other hosts
+  local u=${1%.git}
+  case "$u" in
+    https://github.com/*) u=${u#https://github.com/} ;;
+    git@github.com:*) u=${u#git@github.com:} ;;
+    ssh://git@github.com/*) u=${u#ssh://git@github.com/} ;;
+    *) return 0 ;;
+  esac
+  echo "$u" | tr '[:upper:]' '[:lower:]'
+}
 # How Claude Code names the per-project session directory for a cwd (every char
 # outside [A-Za-z0-9] becomes "-"), e.g. /Users/x/wt-1-fix → -Users-x-wt-1-fix.
 claude_slug() { printf '%s' "$1" | sed 's/[^A-Za-z0-9]/-/g'; }
@@ -543,8 +553,55 @@ elif [[ "$mode" =~ ^[0-9]+$ ]]; then
       -q '[.headRefName, (.isCrossRepository|tostring), (.headRepositoryOwner.login // "-"), (.headRepository.name // "-")] | @tsv') 2>/dev/null ); then
     IFS=$'\t' read -r branch cross fork_owner fork_repo <<<"$pr_info"
     # pull/N/head works for fork PRs too; fall back to a plain branch fetch.
-    git -C "$main_root" fetch --quiet origin "pull/$mode/head:$branch" 2>/dev/null \
-      || git -C "$main_root" fetch --quiet origin "$branch:$branch" 2>/dev/null || true
+    # Fork PRs share head names ("main", "patch-1") and a kept branch can predate a push, so
+    # the local branch may hold other commits: fast-forward it, keep commits on top, else stop.
+    # Fetch into FETCH_HEAD only; the branch is touched after the check.
+    if ! { git -C "$main_root" fetch --quiet origin "pull/$mode/head" 2>/dev/null \
+        && pr_sha=$(git -C "$main_root" rev-parse FETCH_HEAD); }; then
+      git -C "$main_root" fetch --quiet origin "$branch:$branch" 2>/dev/null || true
+    elif ! tip=$(git -C "$main_root" rev-parse --verify --quiet "refs/heads/$branch"); then
+      git -C "$main_root" update-ref "refs/heads/$branch" "$pr_sha"
+    else
+      holder=$(git -C "$main_root" worktree list --porcelain | awk -v b="branch refs/heads/$branch" '
+        /^worktree /{w=substr($0,10)} $0==b{print w; exit}')
+      # Is it this PR's branch? wt sets branch.<name>.remote to the fork's remote for a fork PR,
+      # origin otherwise ("." tracks a local branch, so it is local too). Foreign only when the
+      # remote's GitHub owner/repo and the PR's fork are both known and differ. Without that
+      # (no config because the fork fetch failed, a removed remote, a URL gh_slug can't read,
+      # a deleted fork) fall back to the worktree path, then to the commits.
+      ours=""
+      r=$(git -C "$main_root" config "branch.$branch.remote" || true)
+      url=$(git -C "$main_root" config "remote.$r.url" 2>/dev/null || echo "$r")
+      rslug=$(gh_slug "$url")
+      if [ "$cross" != "true" ]; then
+        case "$r" in ""|origin|.) ours=1 ;; *) ours=0 ;; esac
+      elif [ "$r" = origin ]; then
+        ours=0  # a fork PR's head is not on origin, whatever origin's URL looks like
+      elif [ -n "$rslug" ] && [ "$fork_owner" != "-" ] && [ "$fork_repo" != "-" ]; then
+        [ "$rslug" = "$(gh_slug "https://github.com/$fork_owner/$fork_repo")" ] && ours=1 || ours=0
+      elif [ "$holder" -ef "$HOME/worktrees/${repo}-${mode}-$(sanitize "$branch")" ]; then
+        ours=1
+      fi
+      ahead=0; git -C "$main_root" merge-base --is-ancestor "$pr_sha" "$tip" && ahead=1
+      behind=0; git -C "$main_root" merge-base --is-ancestor "$tip" "$pr_sha" && behind=1
+      keep=0; { [ "$holder" -ef "$main_root" ] || [ "$branch" = "$default" ]; } && keep=1
+      if [ "$ours" = 0 ] || { [ -z "$ours" ] && [ "$ahead" = 0 ] && [ "$behind$keep" != 10 ]; }; then
+        die "local branch '$branch' is not PR #$mode (another PR's branch of that name, or a force-push)${holder:+, checked out at $holder}. To look at the PR without a branch (nothing to push to by mistake): git fetch origin pull/$mode/head && git worktree add --detach ~/worktrees/${repo}-$mode FETCH_HEAD"
+      elif [ "$ahead" = 1 ]; then
+        :  # up to date, or the user's commits on top
+      elif [ "$behind" = 0 ]; then
+        echo "wt: '$branch' has diverged from PR #$mode (your commits, or a force-push); merge or rebase onto ${pr_sha:0:9}" >&2
+      elif [ "$keep" = 1 ]; then
+        echo "wt: '$branch' is behind PR #$mode (${pr_sha:0:9}); not fast-forwarded, it is the default branch or checked out in the main checkout" >&2
+      elif [ -z "$holder" ]; then
+        git -C "$main_root" update-ref "refs/heads/$branch" "$pr_sha" "$tip"
+        echo "wt: fast-forwarded '$branch' to PR #$mode's new commits"
+      elif git -C "$holder" merge --ff-only --quiet "$pr_sha"; then
+        echo "wt: fast-forwarded '$branch' to PR #$mode's new commits"
+      else
+        echo "wt: could not fast-forward $holder to PR #$mode (${pr_sha:0:9}); opening it as is" >&2
+      fi
+    fi
     new_branch=0
     pr_head=1
   else
@@ -611,9 +668,15 @@ fi
 # refspec (or via pull/N/head), which creates the local branch but leaves no upstream and
 # no origin/<branch> remote-tracking ref. Fetch the branch the normal way (this updates
 # origin/<branch> through origin's configured refspec) and point the worktree branch at it.
-if git -C "$wtpath" fetch --quiet origin "$branch" 2>/dev/null; then
+# A fork PR's head name can also exist on origin ("develop", "2.x"): never track that.
+fork_pr=0
+if [ "${cross:-}" = "true" ] && [ "${fork_owner:--}" != "-" ] && [ "${fork_repo:--}" != "-" ]; then
+  [ "$(gh_slug "$(git -C "$main_root" config remote.origin.url)")" = "$(gh_slug "https://github.com/$fork_owner/$fork_repo")" ] \
+    || fork_pr=1
+fi
+if [ "$fork_pr" = 0 ] && git -C "$wtpath" fetch --quiet origin "$branch" 2>/dev/null; then
   git -C "$wtpath" branch --quiet --set-upstream-to="origin/$branch" "$branch" 2>/dev/null || true
-elif [ "${cross:-}" = "true" ] && [ "${fork_owner:--}" != "-" ] && [ "${fork_repo:--}" != "-" ]; then
+elif [ "$fork_pr" = 1 ]; then
   # Fork PR: track the fork through a NAMED remote, reusing any remote that already points
   # at the fork (e.g. one added by VS Code's GitHub PR extension). `gh pr checkout` instead
   # writes the fork's bare URL into branch.<name>.remote/pushRemote — that pushes fine, but
