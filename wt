@@ -538,6 +538,10 @@ if [ "$mode" = "num" ]; then
 fi
 
 # --- create/reuse: determine branch (+ optional number) ---
+# Drop worktrees whose directory is gone (e.g. a cleaned-up temp dir) before any lookup below:
+# git keeps them registered, so wt would reuse a path that no longer exists, and
+# `git worktree add` would refuse their branch. Locked worktrees are left alone.
+git -C "$main_root" worktree prune
 num=""; pr_head=0
 if [ "$mode" = "new" ]; then
   [ $# -ge 1 ] || die "usage: wt new <branch> [num]"
