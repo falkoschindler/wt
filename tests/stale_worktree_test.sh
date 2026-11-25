@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Regression test for stale worktrees: when a worktree's directory is deleted (e.g. a
 # cleaned-up temp dir), git keeps it registered, and `wt <branch>` used to reuse that dead
-# path instead of creating a fresh worktree. Runs against a local bare "origin", no gh.
+# path instead of creating a fresh worktree. Only entries under ~/worktrees are dropped;
+# a locked one or one elsewhere makes wt stop. Runs against a local bare "origin", no gh.
 # Usage: tests/stale_worktree_test.sh [path/to/wt]     (exit 0 = all pass)
 set -uo pipefail
 
@@ -44,8 +45,9 @@ rm -rf "$target"; git -C "$repo" worktree prune
 git -C "$repo" worktree add -q "$HOME/worktrees/other" feat
 rm -rf "$HOME/worktrees/other"
 wt feat
-[ "$rc" -eq 0 ] && [ -d "$target" ] && ! grep -q 'worktrees/other' <<<"$out"
-check "B ignores the dead worktree at another path (rc=$rc)" $?
+[ "$rc" -eq 0 ] && [ -d "$target" ] && ! grep -q 'worktrees/other .*reusing' <<<"$out" \
+  && grep -q 'dropped stale worktree .*/worktrees/other' <<<"$out"
+check "B drops the dead worktree at another path and says so (rc=$rc)" $?
 
 # C: a live worktree of the branch at another path is still reused (no regression).
 rm -rf "$target"; git -C "$repo" worktree prune
@@ -63,6 +65,26 @@ rm -rf "$HOME/worktrees/repo-other"
 wt feat
 [ "$rc" -eq 0 ] && [ -d "$target" ] && git -C "$repo" worktree list --porcelain | grep -q "^worktree .*/worktrees/repo-other$"
 check "D leaves a dead worktree of another branch registered (rc=$rc)" $?
+
+# E: a LOCKED dead worktree of the branch is never `prunable`, so it is not dropped either;
+# wt must stop with a hint instead of "reusing" a directory that is not there.
+rm -rf "$target"; git -C "$repo" worktree remove --force "$HOME/worktrees/repo-other"; git -C "$repo" worktree prune
+git -C "$repo" worktree add -q "$target" feat
+git -C "$repo" worktree lock "$target"; rm -rf "$target"
+wt feat
+[ "$rc" -ne 0 ] && grep -q 'registered but its directory is missing' <<<"$out" && [ ! -d "$target" ] \
+  && git -C "$repo" worktree list --porcelain | grep -q "^worktree .*/worktrees/repo-feat$"
+check "E stops on a locked dead worktree and leaves it registered (rc=$rc)" $?
+
+# F: a dead worktree OUTSIDE ~/worktrees (may be on an unmounted volume) is not dropped, even
+# though it holds the branch: wt stops with the same hint.
+git -C "$repo" worktree unlock "$target"; git -C "$repo" worktree remove --force "$target"
+mkdir -p "$tmp/elsewhere"; git -C "$repo" worktree add -q "$tmp/elsewhere/feat" feat
+rm -rf "$tmp/elsewhere/feat"
+wt feat
+[ "$rc" -ne 0 ] && grep -q 'registered but its directory is missing' <<<"$out" && [ ! -d "$target" ] \
+  && git -C "$repo" worktree list --porcelain | grep -q "^worktree .*/elsewhere/feat$"
+check "F leaves a dead worktree outside ~/worktrees alone and stops (rc=$rc)" $?
 
 echo
 [ "$fails" -eq 0 ] && echo "all checks passed" || echo "$fails check(s) failed"
