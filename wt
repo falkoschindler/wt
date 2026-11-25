@@ -424,10 +424,16 @@ if [ "$mode" = "board" ]; then
   cat "$tmp/iss" "$tmp/pr" 2>/dev/null | sort -t"$(printf '\t')" -k2,2 -k3,3 -k5,5n >"$tmp/rows"
   [ -s "$tmp/rows" ] || { echo "wt: nothing assigned in $repo"; exit 0; }
 
-  # Branches that currently have a worktree in this repo (for the ✓ column).
-  wtset="|"
+  # Branches that currently have a worktree in this repo (for the ✓ column). An entry whose
+  # directory is gone (git keeps it, flagged `prunable`) does not count; board is read-only,
+  # so it is skipped here rather than pruned. Blocks end with a blank line.
+  wtset="|"; b=""
   while IFS= read -r line; do
-    case "$line" in "branch refs/heads/"*) wtset="${wtset}${line#branch refs/heads/}|" ;; esac
+    case "$line" in
+      "branch refs/heads/"*) b=${line#branch refs/heads/} ;;
+      prunable*) b="" ;;
+      "") [ -n "$b" ] && wtset="${wtset}${b}|"; b="" ;;
+    esac
   done < <(git -C "$main_root" worktree list --porcelain 2>/dev/null)
 
   me=$(cat "$tmp/me" 2>/dev/null || true)
@@ -538,6 +544,33 @@ if [ "$mode" = "num" ]; then
 fi
 
 # --- create/reuse: determine branch (+ optional number) ---
+# A worktree whose directory is gone (e.g. a cleaned-up temp dir) stays registered, flagged
+# `prunable`: wt would reuse its path, and `git worktree add` would refuse its branch. Drop such
+# an entry when it holds the branch or sits at the path about to be used, and only if it lives
+# under ~/worktrees: those wt created itself, on a volume that is evidently mounted. Anything
+# else that is registered but missing is left alone and stopped on below (missing_worktree):
+# a worktree elsewhere may sit on a volume that is merely not mounted right now, and removing
+# its entry would orphan that checkout (its HEAD, index and reflog live in .git/worktrees/<id>).
+# Locked entries are never flagged, so they stay too. No blanket `git worktree prune` for the
+# same reason: git's own gc waits three months before it prunes.
+drop_dead_worktree() { # <branch> [<path>]
+  local home_wt
+  home_wt=$(cd "$HOME/worktrees" 2>/dev/null && pwd -P) || return 0  # git lists physical paths
+  git -C "$main_root" worktree list --porcelain | awk -v b="branch refs/heads/$1" -v p="worktree ${2:-}" -v h="$home_wt/" '
+    /^worktree /{w=substr($0,10); hit=($0==p); dead=0}
+    $0==b{hit=1} /^prunable/{dead=1}
+    /^$/{if(hit&&dead&&substr(w,1,length(h))==h)print w}' \
+  | while IFS= read -r w; do
+      git -C "$main_root" worktree remove --force "$w"
+      echo "wt: dropped stale worktree $w (its directory was gone)" >&2
+    done
+}
+missing_worktree() { # <path>: registered for $branch, but its directory is not there
+  die "worktree $1 for '$branch' is registered but its directory is missing (locked, or its volume not mounted?); mount it, or drop the entry: git -C '$main_root' worktree remove -f -f '$1'"
+}
+# Create ~/worktrees first: if it was wiped as a whole, its entries are dead too, and
+# drop_dead_worktree must see it to drop the one in the way before the fetch below.
+mkdir -p "$HOME/worktrees"
 num=""; pr_head=0
 if [ "$mode" = "new" ]; then
   [ $# -ge 1 ] || die "usage: wt new <branch> [num]"
@@ -552,6 +585,7 @@ elif [[ "$mode" =~ ^[0-9]+$ ]]; then
   if pr_info=$( (cd "$main_root" && gh pr view "$mode" --json headRefName,isCrossRepository,headRepositoryOwner,headRepository \
       -q '[.headRefName, (.isCrossRepository|tostring), (.headRepositoryOwner.login // "-"), (.headRepository.name // "-")] | @tsv') 2>/dev/null ); then
     IFS=$'\t' read -r branch cross fork_owner fork_repo <<<"$pr_info"
+    drop_dead_worktree "$branch"
     # pull/N/head works for fork PRs too; fall back to a plain branch fetch.
     # Fork PRs share head names ("main", "patch-1") and a kept branch can predate a push, so
     # the local branch may hold other commits: fast-forward it, keep commits on top, else stop.
@@ -564,6 +598,9 @@ elif [[ "$mode" =~ ^[0-9]+$ ]]; then
     else
       holder=$(git -C "$main_root" worktree list --porcelain | awk -v b="branch refs/heads/$branch" '
         /^worktree /{w=substr($0,10)} $0==b{print w; exit}')
+      # A dead holder that drop_dead_worktree left alone (outside ~/worktrees, or locked):
+      # stop here with the hint, not after a failed fast-forward in a missing directory.
+      [ -z "$holder" ] || [ -d "$holder" ] || missing_worktree "$holder"
       # Is it this PR's branch? wt sets branch.<name>.remote to the fork's remote for a fork PR,
       # origin otherwise ("." tracks a local branch, so it is local too). Foreign only when the
       # remote's GitHub owner/repo and the PR's fork are both known and differ. Without that
@@ -629,6 +666,9 @@ elif [[ "$mode" =~ ^[0-9]+$ ]]; then
   fi
 else
   branch=$mode
+  # Drop a dead worktree holding the branch first: git refuses to fetch into a checked-out
+  # branch even when its directory is gone, and the worktree would be recreated on the old tip.
+  drop_dead_worktree "$branch"
   git -C "$main_root" fetch --quiet origin "$branch:$branch" 2>/dev/null || true
   new_branch=0
 fi
@@ -636,14 +676,15 @@ fi
 slug=$(sanitize "$branch")
 [ -n "$num" ] && slug="${num}-${slug}"
 wtpath="$HOME/worktrees/${repo}-${slug}"
-mkdir -p "$HOME/worktrees"
 
 # Reuse by branch, not by path: if the branch is already checked out in some worktree
 # (created under another name — issue number, PR number, or bare branch name), open that
 # one instead of failing to check the same branch out twice.
+drop_dead_worktree "$branch" "$wtpath"
 existing=$(git -C "$main_root" worktree list --porcelain | awk -v b="branch refs/heads/$branch" '
   /^worktree /{w=substr($0,10)} $0==b{print w; exit}')
 if [ -n "$existing" ] && [ "$existing" != "$wtpath" ]; then
+  [ -d "$existing" ] || missing_worktree "$existing"
   take_session "$existing"
   open_editor "$existing"
   echo "wt: $existing  (branch: $branch, reusing existing worktree)"
@@ -651,6 +692,7 @@ if [ -n "$existing" ] && [ "$existing" != "$wtpath" ]; then
 fi
 
 if git -C "$main_root" worktree list --porcelain | grep -qx "worktree $wtpath"; then
+  [ -d "$wtpath" ] || missing_worktree "$wtpath"
   echo "wt: reusing existing worktree"
 elif git -C "$main_root" show-ref --verify --quiet "refs/heads/$branch"; then
   # The branch already exists locally (e.g. its worktree was removed, the branch kept) —

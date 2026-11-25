@@ -207,6 +207,16 @@ git -C "$repo" config branch.samefeat.remote .
 wt 9
 [ "$rc" -eq 0 ] && [ "$(head_of "$ws")" = "$my9" ]; check "Q a same-repo branch tracking a local branch is ours (rc=$rc)" $?
 
+# A dead worktree (directory deleted, entry kept) of the PR's branch: wt drops the entry,
+# fast-forwards the kept branch and recreates the worktree on the PR's new head.
+w4="$HOME/worktrees/repo-4-feat"
+rm -rf "$w4"
+git -C "$src" checkout -q --detach "$feat"; feat2b=$(commit "$src" "same-repo feat follow-up")
+git -C "$src" push -q -f "$o" "$feat2b:refs/heads/feat"; setpr 4 "$feat2b"
+wt 4
+[ "$rc" -eq 0 ] && [ "$(head_of "$w4")" = "$feat2b" ] && echo "$out" | grep -q 'dropped stale worktree'
+check "R a dead worktree of PR 4 is dropped and recreated on the new head (rc=$rc)" $?
+
 echo
 [ "$fails" -eq 0 ] && echo "all checks passed" || echo "$fails check(s) failed"
 [ "$fails" -eq 0 ]
