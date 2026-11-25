@@ -86,6 +86,18 @@ wt feat
   && git -C "$repo" worktree list --porcelain | grep -q "^worktree .*/elsewhere/feat$"
 check "F leaves a dead worktree outside ~/worktrees alone and stops (rc=$rc)" $?
 
+# G: the dead worktree held the branch while origin moved on. The entry must go before the
+# fetch, or git refuses to update the "checked out" branch and the worktree is recreated on
+# the old local tip.
+git -C "$repo" worktree remove --force "$tmp/elsewhere/feat"
+git -C "$repo" worktree add -q "$target" feat
+rm -rf "$target"
+feat2=$(git -C "$repo" commit-tree -p feat -m c1 "$(git -C "$repo" rev-parse 'feat^{tree}')")
+git -C "$repo" push -q origin "$feat2:refs/heads/feat"
+wt feat
+[ "$rc" -eq 0 ] && [ "$(git -C "$target" rev-parse HEAD)" = "$feat2" ]
+check "G recreates the worktree on origin's current tip, not the old local one (rc=$rc)" $?
+
 echo
 [ "$fails" -eq 0 ] && echo "all checks passed" || echo "$fails check(s) failed"
 [ "$fails" -eq 0 ]

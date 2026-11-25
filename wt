@@ -566,7 +566,7 @@ drop_dead_worktree() { # <branch> [<path>]
     done
 }
 missing_worktree() { # <path>: registered for $branch, but its directory is not there
-  die "worktree $1 for '$branch' is registered but its directory is missing (locked, or its volume not mounted?); mount it, or drop the entry: git -C $main_root worktree remove -f -f $1"
+  die "worktree $1 for '$branch' is registered but its directory is missing (locked, or its volume not mounted?); mount it, or drop the entry: git -C '$main_root' worktree remove -f -f '$1'"
 }
 num=""; pr_head=0
 if [ "$mode" = "new" ]; then
@@ -660,6 +660,9 @@ elif [[ "$mode" =~ ^[0-9]+$ ]]; then
   fi
 else
   branch=$mode
+  # Drop a dead worktree holding the branch first: git refuses to fetch into a checked-out
+  # branch even when its directory is gone, and the worktree would be recreated on the old tip.
+  drop_dead_worktree "$branch"
   git -C "$main_root" fetch --quiet origin "$branch:$branch" 2>/dev/null || true
   new_branch=0
 fi
