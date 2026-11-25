@@ -424,10 +424,16 @@ if [ "$mode" = "board" ]; then
   cat "$tmp/iss" "$tmp/pr" 2>/dev/null | sort -t"$(printf '\t')" -k2,2 -k3,3 -k5,5n >"$tmp/rows"
   [ -s "$tmp/rows" ] || { echo "wt: nothing assigned in $repo"; exit 0; }
 
-  # Branches that currently have a worktree in this repo (for the ✓ column).
-  wtset="|"
+  # Branches that currently have a worktree in this repo (for the ✓ column). An entry whose
+  # directory is gone (git keeps it, flagged `prunable`) does not count; board is read-only,
+  # so it is skipped here rather than pruned. Blocks end with a blank line.
+  wtset="|"; b=""
   while IFS= read -r line; do
-    case "$line" in "branch refs/heads/"*) wtset="${wtset}${line#branch refs/heads/}|" ;; esac
+    case "$line" in
+      "branch refs/heads/"*) b=${line#branch refs/heads/} ;;
+      prunable*) b="" ;;
+      "") [ -n "$b" ] && wtset="${wtset}${b}|"; b="" ;;
+    esac
   done < <(git -C "$main_root" worktree list --porcelain 2>/dev/null)
 
   me=$(cat "$tmp/me" 2>/dev/null || true)
