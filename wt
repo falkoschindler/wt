@@ -544,10 +544,18 @@ if [ "$mode" = "num" ]; then
 fi
 
 # --- create/reuse: determine branch (+ optional number) ---
-# Drop worktrees whose directory is gone (e.g. a cleaned-up temp dir) before any lookup below:
-# git keeps them registered, so wt would reuse a path that no longer exists, and
-# `git worktree add` would refuse their branch. Locked worktrees are left alone.
-git -C "$main_root" worktree prune
+# A worktree whose directory is gone (e.g. a cleaned-up temp dir) stays registered, flagged
+# `prunable`: wt would reuse its path, and `git worktree add` would refuse its branch. Drop such
+# an entry when it holds the branch or sits at the path about to be used, and only that one: a
+# blanket `git worktree prune` would also forget a worktree whose volume is merely not mounted
+# right now (git's own gc waits three months for that reason). Locked entries stay, as with prune.
+drop_dead_worktree() { # <branch> [<path>]
+  git -C "$main_root" worktree list --porcelain | awk -v b="branch refs/heads/$1" -v p="worktree ${2:-}" '
+    /^worktree /{w=substr($0,10); hit=($0==p); dead=0}
+    $0==b{hit=1} /^prunable/{dead=1}
+    /^$/{if(hit&&dead)print w}' \
+  | while IFS= read -r w; do git -C "$main_root" worktree remove --force "$w"; done
+}
 num=""; pr_head=0
 if [ "$mode" = "new" ]; then
   [ $# -ge 1 ] || die "usage: wt new <branch> [num]"
@@ -562,6 +570,7 @@ elif [[ "$mode" =~ ^[0-9]+$ ]]; then
   if pr_info=$( (cd "$main_root" && gh pr view "$mode" --json headRefName,isCrossRepository,headRepositoryOwner,headRepository \
       -q '[.headRefName, (.isCrossRepository|tostring), (.headRepositoryOwner.login // "-"), (.headRepository.name // "-")] | @tsv') 2>/dev/null ); then
     IFS=$'\t' read -r branch cross fork_owner fork_repo <<<"$pr_info"
+    drop_dead_worktree "$branch"
     # pull/N/head works for fork PRs too; fall back to a plain branch fetch.
     # Fork PRs share head names ("main", "patch-1") and a kept branch can predate a push, so
     # the local branch may hold other commits: fast-forward it, keep commits on top, else stop.
@@ -651,6 +660,7 @@ mkdir -p "$HOME/worktrees"
 # Reuse by branch, not by path: if the branch is already checked out in some worktree
 # (created under another name — issue number, PR number, or bare branch name), open that
 # one instead of failing to check the same branch out twice.
+drop_dead_worktree "$branch" "$wtpath"
 existing=$(git -C "$main_root" worktree list --porcelain | awk -v b="branch refs/heads/$branch" '
   /^worktree /{w=substr($0,10)} $0==b{print w; exit}')
 if [ -n "$existing" ] && [ "$existing" != "$wtpath" ]; then

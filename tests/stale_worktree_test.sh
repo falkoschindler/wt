@@ -54,6 +54,16 @@ wt feat
 [ "$rc" -eq 0 ] && grep -q 'worktrees/other .*reusing existing worktree' <<<"$out" && [ ! -d "$target" ]
 check "C still reuses a live worktree at another path (rc=$rc)" $?
 
+# D: a dead worktree of ANOTHER branch is not touched (it may just be on an unmounted volume);
+# only the entry in the way of this branch is dropped.
+rm -rf "$target" "$HOME/worktrees/other"; git -C "$repo" worktree prune
+git -C "$repo" branch other
+git -C "$repo" worktree add -q "$HOME/worktrees/repo-other" other
+rm -rf "$HOME/worktrees/repo-other"
+wt feat
+[ "$rc" -eq 0 ] && [ -d "$target" ] && git -C "$repo" worktree list --porcelain | grep -q "^worktree .*/worktrees/repo-other$"
+check "D leaves a dead worktree of another branch registered (rc=$rc)" $?
+
 echo
 [ "$fails" -eq 0 ] && echo "all checks passed" || echo "$fails check(s) failed"
 [ "$fails" -eq 0 ]
