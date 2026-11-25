@@ -98,6 +98,15 @@ wt feat
 [ "$rc" -eq 0 ] && [ "$(git -C "$target" rev-parse HEAD)" = "$feat2" ]
 check "G recreates the worktree on origin's current tip, not the old local one (rc=$rc)" $?
 
+# H: ~/worktrees itself was wiped. Every entry under it is dead, and the one holding the
+# branch must still go before the fetch, or the worktree comes back on the old local tip.
+rm -rf "$HOME/worktrees"
+feat3=$(git -C "$repo" commit-tree -p "$feat2" -m c2 "$(git -C "$repo" rev-parse 'feat^{tree}')")
+git -C "$repo" push -q origin "$feat3:refs/heads/feat"
+wt feat
+[ "$rc" -eq 0 ] && [ "$(git -C "$target" rev-parse HEAD)" = "$feat3" ]
+check "H recreates the worktree on origin's tip when ~/worktrees as a whole was wiped (rc=$rc)" $?
+
 echo
 [ "$fails" -eq 0 ] && echo "all checks passed" || echo "$fails check(s) failed"
 [ "$fails" -eq 0 ]

@@ -568,6 +568,9 @@ drop_dead_worktree() { # <branch> [<path>]
 missing_worktree() { # <path>: registered for $branch, but its directory is not there
   die "worktree $1 for '$branch' is registered but its directory is missing (locked, or its volume not mounted?); mount it, or drop the entry: git -C '$main_root' worktree remove -f -f '$1'"
 }
+# Create ~/worktrees first: if it was wiped as a whole, its entries are dead too, and
+# drop_dead_worktree must see it to drop the one in the way before the fetch below.
+mkdir -p "$HOME/worktrees"
 num=""; pr_head=0
 if [ "$mode" = "new" ]; then
   [ $# -ge 1 ] || die "usage: wt new <branch> [num]"
@@ -595,6 +598,9 @@ elif [[ "$mode" =~ ^[0-9]+$ ]]; then
     else
       holder=$(git -C "$main_root" worktree list --porcelain | awk -v b="branch refs/heads/$branch" '
         /^worktree /{w=substr($0,10)} $0==b{print w; exit}')
+      # A dead holder that drop_dead_worktree left alone (outside ~/worktrees, or locked):
+      # stop here with the hint, not after a failed fast-forward in a missing directory.
+      [ -z "$holder" ] || [ -d "$holder" ] || missing_worktree "$holder"
       # Is it this PR's branch? wt sets branch.<name>.remote to the fork's remote for a fork PR,
       # origin otherwise ("." tracks a local branch, so it is local too). Foreign only when the
       # remote's GitHub owner/repo and the PR's fork are both known and differ. Without that
@@ -670,7 +676,6 @@ fi
 slug=$(sanitize "$branch")
 [ -n "$num" ] && slug="${num}-${slug}"
 wtpath="$HOME/worktrees/${repo}-${slug}"
-mkdir -p "$HOME/worktrees"
 
 # Reuse by branch, not by path: if the branch is already checked out in some worktree
 # (created under another name — issue number, PR number, or bare branch name), open that
